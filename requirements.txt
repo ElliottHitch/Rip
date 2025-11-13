@@ -1,1 +1,2 @@
-yt-dlp==2025.3.31 
+# Pull the latest yt-dlp (nightly) for continued compatibility with YouTube changes
+yt-dlp @ git+https://github.com/yt-dlp/yt-dlp@master
