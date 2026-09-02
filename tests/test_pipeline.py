@@ -1,5 +1,8 @@
 import os
+import sys
 import tempfile
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -205,6 +208,54 @@ class PipelineTestCase(unittest.TestCase):
                 {"vcodec": "none", "acodec": "opus", "abr": 128},
             )
         self.assertEqual(os.listdir(self.temp.name), [])
+
+    def test_ffmpeg_cancellation_stops_quiet_sigterm_ignoring_child(self):
+        line_seen = threading.Event()
+        finished = threading.Event()
+        errors = []
+
+        def append_log(message):
+            line_seen.set()
+
+        self.downloader._append_log = append_log
+        command = [
+            sys.executable,
+            "-c",
+            "import signal; print('ready', flush=True); signal.signal(signal.SIGTERM, signal.SIG_IGN); signal.pause()",
+        ]
+
+        def run_ffmpeg():
+            try:
+                self.downloader._execute_ffmpeg(command, "Transcoding", None, 20, 98)
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                finished.set()
+
+        worker = threading.Thread(target=run_ffmpeg)
+        worker.start()
+        process = None
+        try:
+            self.assertTrue(line_seen.wait(1), "quiet child did not produce its initial line")
+            process = self.downloader.active_process
+            self.assertIsNotNone(process)
+            assert process is not None
+            self.downloader.cancel_requested = True
+            process.terminate()
+            started = time.monotonic()
+            self.assertTrue(finished.wait(2), "FFmpeg cancellation remained blocked")
+            self.assertLessEqual(time.monotonic() - started, 2)
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+            worker.join(1)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], app.DownloadCancelled)
+        self.assertIsNone(self.downloader.active_process)
+        assert process is not None
+        self.assertIsNotNone(process.poll())
 
 
 if __name__ == "__main__":

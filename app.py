@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -27,6 +28,8 @@ TARGET_AUDIO_BITRATE = 192_000  # bits per second
 MAX_FILE_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB
 MAX_DOWNLOAD_ATTEMPTS = 2
 RETRY_BACKOFF_SECONDS = (5,)
+FFMPEG_CANCEL_GRACE_SECONDS = 0.5
+FFMPEG_READER_POLL_SECONDS = 0.1
 
 
 class DownloadCancelled(Exception):
@@ -714,14 +717,33 @@ class YouTubeDownloaderApp:
         except OSError as exc:
             raise RuntimeError(f"Unable to start FFmpeg during {stage_label.lower()}.") from exc
         self.active_process = process
+        output_queue: queue.Queue[Optional[str]] = queue.Queue()
+
+        def read_output():
+            try:
+                for line in process.stdout or ():
+                    output_queue.put(line)
+            except (OSError, ValueError):
+                # The cancellation cleanup may close a pipe while this reader exits.
+                pass
+            finally:
+                output_queue.put(None)
+
+        reader = threading.Thread(target=read_output, name="ffmpeg-output-reader", daemon=True)
+        reader.start()
         last_log = 0.0
         fallback_progress = start_progress
         try:
-            for line in process.stdout or ():
-                if self.cancel_requested and process.poll() is None:
-                    process.terminate()
-                    process.wait()
+            while True:
+                if self.cancel_requested:
+                    self._stop_ffmpeg_process(process)
                     raise DownloadCancelled()
+                try:
+                    line = output_queue.get(timeout=FFMPEG_READER_POLL_SECONDS)
+                except queue.Empty:
+                    continue
+                if line is None:
+                    break
                 line = (line or "").strip()
                 if not line:
                     continue
@@ -742,6 +764,12 @@ class YouTubeDownloaderApp:
                     self._append_log(f"{stage_label}: {line}")
                     last_log = now
         finally:
+            if self.cancel_requested:
+                self._stop_ffmpeg_process(process)
+            reader.join(timeout=FFMPEG_CANCEL_GRACE_SECONDS)
+            if reader.is_alive() and process.stdout is not None:
+                process.stdout.close()
+                reader.join(timeout=FFMPEG_CANCEL_GRACE_SECONDS)
             self.active_process = None
 
         return_code = process.wait()
@@ -750,6 +778,17 @@ class YouTubeDownloaderApp:
         if return_code != 0:
             raise RuntimeError(f"FFmpeg failed during {stage_label.lower()} (exit code {return_code}).")
         self._set_progress(end_progress)
+
+    @staticmethod
+    def _stop_ffmpeg_process(process: subprocess.Popen):
+        """Stop FFmpeg promptly, escalating when it ignores a graceful signal."""
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=FFMPEG_CANCEL_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=FFMPEG_CANCEL_GRACE_SECONDS)
 
     def _remux_passthrough(
         self, video_path: str, audio_path: str, output_path: str, duration: Optional[float]
