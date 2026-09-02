@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -14,20 +15,120 @@ from dataclasses import dataclass, field
 from tkinter import ttk, filedialog, messagebox
 from typing import Dict, Optional, Tuple
 
-import yt_dlp
+try:
+    import yt_dlp
+    YT_DLP_IMPORT_ERROR: Optional[ImportError] = None
+except ImportError as exc:  # Keep the GUI available to explain the missing dependency.
+    yt_dlp = None  # type: ignore[assignment]
+    YT_DLP_IMPORT_ERROR = exc
 
 ALLOWED_FPS = {24, 25, 30}
 TARGET_VIDEO_BITRATE = 40_000_000  # bits per second (40 Mbps)
 TARGET_AUDIO_BITRATE = 192_000  # bits per second
 MAX_FILE_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB
+MAX_DOWNLOAD_ATTEMPTS = 2
+RETRY_BACKOFF_SECONDS = (5,)
+FFMPEG_CANCEL_GRACE_SECONDS = 0.5
+FFMPEG_READER_POLL_SECONDS = 0.1
 
 
 class DownloadCancelled(Exception):
     """Raised when the user cancels an in-progress download/transcode."""
 
 
+class PipelineError(Exception):
+    """An expected failure with a safe user-facing message and pipeline stage."""
+
+    def __init__(self, stage: str, user_message: str, detail: str, *, retryable: bool = False):
+        super().__init__(detail)
+        self.stage = stage
+        self.user_message = user_message
+        self.detail = detail
+        self.retryable = retryable
+
+
+class StreamDownloadError(PipelineError):
+    """A stream failure that may be recoverable by fresh extraction."""
+
+    def __init__(self, label: str, detail: str, *, status_code: Optional[int] = None):
+        label_title = label.capitalize()
+        if status_code == 403:
+            user_message = (
+                f"{label_title} stream access was refused (HTTP 403). One bounded, best-effort "
+                "refresh of stream details did not resolve it. This may reflect access, login, "
+                "age, region, policy, PO-token, or rate restrictions; the app does not bypass "
+                "service restrictions. Check that the video is available to you, then try again."
+            )
+        elif status_code == 429:
+            user_message = (
+                f"{label_title} stream was rate-limited (HTTP 429). The app will not retry "
+                "automatically. Wait before trying again and avoid repeated requests."
+            )
+        else:
+            user_message = "The connection could not be completed. Check your network connection and try again."
+        super().__init__(
+            f"{label} download",
+            user_message,
+            detail,
+            retryable=status_code == 403 or status_code is None or 500 <= (status_code or 0) < 600,
+        )
+        self.label = label
+        self.status_code = status_code
+
+
+def metadata_error_message(status_code: Optional[int]) -> str:
+    """Return truthful, stage-specific metadata failure guidance."""
+    if status_code == 403:
+        return (
+            "Metadata access was refused (HTTP 403). Check that the video is available to you; "
+            "the app does not bypass login, age, region, policy, or other service restrictions."
+        )
+    if status_code == 429:
+        return (
+            "Metadata was rate-limited (HTTP 429). The app will not retry automatically; "
+            "wait before trying again and avoid repeated requests."
+        )
+    return "Couldn't read this URL. Check the link and your connection, then try again."
+
+
+def completion_status(output_path: str, *, oversized: bool = False) -> Tuple[str, str]:
+    """Build the visible completion state and its semantic color."""
+    filename = os.path.basename(output_path)
+    if oversized:
+        return (
+            f"Completed with warning: {filename} was saved, but it is not Unifi-compliant "
+            "because it exceeds the 5 GB single-file limit.",
+            "#ffbf00",
+        )
+    return f"Completed: {filename}", "#4dcc7d"
+
+
+def is_playlist_metadata(metadata: Dict) -> bool:
+    """Identify extractor results that represent more than one video."""
+    return metadata.get("_type") in {"playlist", "multi_video"}
+
+
+def safe_error_detail(exc: BaseException) -> str:
+    """Redact URLs and credential-like query values from diagnostics."""
+    detail = str(exc).replace("\n", " ").strip()
+    detail = re.sub(r"https?://[^\s]+", "<url>", detail, flags=re.IGNORECASE)
+    detail = re.sub(
+        r"(?i)(authorization|cookie|token|signature|sig|key|videoplayback)=[^&\s]+",
+        r"\1=<redacted>",
+        detail,
+    )
+    return detail[:500] or exc.__class__.__name__
+
+
+def ytdlp_status_code(exc: BaseException) -> Optional[int]:
+    match = re.search(r"\bHTTP(?: error)?\s+(\d{3})\b", str(exc), re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
 @dataclass
 class EnvironmentStatus:
+    yt_dlp_available: bool = False
+    yt_dlp_version: Optional[str] = None
     ffmpeg_path: Optional[str] = None
     ffprobe_path: Optional[str] = None
     nvenc_available: bool = False
@@ -37,7 +138,9 @@ class EnvironmentStatus:
 def sanitize_filename(name: str) -> str:
     """Generate a filesystem-friendly filename."""
     name = re.sub(r"[<>:\"/\\|?*]", "", name)
+    name = re.sub(r"[\x00-\x1f\x7f]", "", name)
     name = re.sub(r"\s+", " ", name).strip()
+    name = name.rstrip(". ")
     return name or "video"
 
 
@@ -53,6 +156,11 @@ def human_readable_size(num_bytes: float) -> str:
 def probe_environment() -> EnvironmentStatus:
     """Detect ffmpeg/ffprobe availability and NVENC support."""
     status = EnvironmentStatus()
+    if yt_dlp is not None:
+        status.yt_dlp_available = True
+        status.yt_dlp_version = getattr(getattr(yt_dlp, "version", None), "__version__", None)
+    else:
+        status.issues.append("yt-dlp is not installed. Install the requirements before downloading.")
     status.ffmpeg_path = shutil.which("ffmpeg")
     status.ffprobe_path = shutil.which("ffprobe")
     if not status.ffmpeg_path:
@@ -62,14 +170,31 @@ def probe_environment() -> EnvironmentStatus:
     if status.ffmpeg_path:
         try:
             result = subprocess.run(
-                [status.ffmpeg_path, "-hide_banner", "-encoders"],
+                [
+                    status.ffmpeg_path,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=16x16:r=1",
+                    "-frames:v",
+                    "1",
+                    "-c:v",
+                    "h264_nvenc",
+                    "-f",
+                    "null",
+                    "-",
+                ],
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=10,
             )
-            status.nvenc_available = "h264_nvenc" in result.stdout
+            status.nvenc_available = result.returncode == 0
         except Exception as exc:
-            status.issues.append(f"Unable to query FFmpeg encoders: {exc}")
+            status.issues.append(f"Unable to probe NVENC: {safe_error_detail(exc)}")
     return status
 
 
@@ -169,6 +294,8 @@ def parse_ffmpeg_time(progress_line: str) -> Optional[float]:
 def ensure_unique_path(directory: str, base_name: str) -> str:
     """Generate a unique MP4 path inside directory."""
     os.makedirs(directory, exist_ok=True)
+    directory = os.path.abspath(directory)
+    base_name = sanitize_filename(base_name)
     candidate = os.path.join(directory, f"{base_name}.mp4")
     counter = 1
     while os.path.exists(candidate):
@@ -197,6 +324,7 @@ class YouTubeDownloaderApp:
         self.status_var = tk.StringVar(value="Ready.")
         self.progress_var = tk.IntVar(value=0)
         self.env_summary_var = tk.StringVar()
+        self._last_output_warning = False
 
         self._build_theme()
         self._build_ui()
@@ -230,7 +358,7 @@ class YouTubeDownloaderApp:
         self.main_frame.pack(fill="both", expand=True)
         self.main_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(self.main_frame, text="YouTube / Playlist URL").grid(row=0, column=0, sticky="w")
+        ttk.Label(self.main_frame, text="YouTube video URL (single video only)").grid(row=0, column=0, sticky="w")
         self.url_entry = ttk.Entry(self.main_frame, textvariable=self.url_var, width=80)
         self.url_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=5)
 
@@ -254,11 +382,18 @@ class YouTubeDownloaderApp:
         )
 
         self.progress_bar = ttk.Progressbar(
-            self.main_frame, maximum=100, variable=self.progress_var, style="Green.Horizontal.TProgressbar"
+            self.main_frame, maximum=100, variable=self.progress_var, mode="determinate", style="Green.Horizontal.TProgressbar"
         )
         self.progress_bar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=8)
 
-        self.status_label = ttk.Label(self.main_frame, textvariable=self.status_var, font=("Segoe UI", 10, "bold"))
+        self.status_label = ttk.Label(
+            self.main_frame,
+            textvariable=self.status_var,
+            font=("Segoe UI", 10, "bold"),
+            wraplength=680,
+            justify="left",
+            anchor="w",
+        )
         self.status_label.grid(row=5, column=0, columnspan=3, sticky="w")
 
         env_frame = ttk.LabelFrame(self.main_frame, text="Environment", padding=10)
@@ -297,9 +432,22 @@ class YouTubeDownloaderApp:
 
         self.root.after(0, _update)
 
-    def _set_progress(self, value: int):
+    def _set_progress(self, value: Optional[int]):
+        if value is None:
+            self.root.after(0, self._show_indeterminate_progress)
+            return
         value = max(0, min(100, value))
-        self.root.after(0, lambda: self.progress_var.set(value))
+        self.root.after(0, lambda: self._show_determinate_progress(value))
+
+    def _show_indeterminate_progress(self):
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode="indeterminate")
+        self.progress_bar.start(12)
+
+    def _show_determinate_progress(self, value: int):
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode="determinate")
+        self.progress_var.set(value)
 
     def _append_log(self, message: str):
         timestamp = time.strftime("%H:%M:%S")
@@ -312,11 +460,14 @@ class YouTubeDownloaderApp:
         self.log_widget.see("end")
         self.log_widget.configure(state="disabled")
 
-    def _reset_controls(self):
-        self.download_button.configure(state="normal")
-        self.cancel_button.configure(state="disabled")
-        self._set_progress(0)
-        self._set_stage("Idle")
+    def _reset_controls(self, *, retry: bool = False):
+        self.download_button.configure(
+            text="Try Again" if retry else "Start Download",
+            state="normal",
+        )
+        self.cancel_button.configure(text="Cancel", state="disabled")
+        if retry:
+            self.download_button.focus_set()
 
     def _handle_test_environment(self):
         self.env_status = probe_environment()
@@ -330,10 +481,15 @@ class YouTubeDownloaderApp:
             )
 
     def _update_environment_summary(self):
-        if not self.env_status.ffmpeg_path:
-            summary = "FFmpeg: missing\n"
+        if not self.env_status.yt_dlp_available:
+            summary = "yt-dlp: missing\n"
         else:
-            summary = f"FFmpeg: {self.env_status.ffmpeg_path}\n"
+            version = self.env_status.yt_dlp_version or "unknown version"
+            summary = f"yt-dlp: {version}\n"
+        if not self.env_status.ffmpeg_path:
+            summary += "FFmpeg: missing\n"
+        else:
+            summary += f"FFmpeg: {self.env_status.ffmpeg_path}\n"
         if not self.env_status.ffprobe_path:
             summary += "FFprobe: missing\n"
         else:
@@ -369,18 +525,38 @@ class YouTubeDownloaderApp:
         url = self.url_var.get().strip()
         destination = self.path_var.get().strip()
         if not url:
-            self._set_status("Enter a video or playlist URL.", "#ff6b6b")
+            self._set_status("Enter a single-video URL.", "#ff6b6b")
             return
         if not destination:
             self._set_status("Select a download directory.", "#ff6b6b")
             return
-        os.makedirs(destination, exist_ok=True)
+        if not self.env_status.yt_dlp_available:
+            self._set_status(
+                "yt-dlp is required. Install the requirements, then choose Test Environment.",
+                "#ff6b6b",
+            )
+            return
+        if not self.env_status.ffmpeg_path:
+            self._set_status(
+                "FFmpeg is required to create a Unifi-ready MP4. Install FFmpeg, then choose Test Environment.",
+                "#ff6b6b",
+            )
+            return
+        try:
+            os.makedirs(destination, exist_ok=True)
+            if not os.path.isdir(destination):
+                raise NotADirectoryError(destination)
+        except OSError as exc:
+            self._set_status("Unable to use the selected download directory.", "#ff6b6b")
+            self._append_log(f"Input path error: {safe_error_detail(exc)}")
+            return
 
         self.cancel_requested = False
+        self._last_output_warning = False
         self._set_status("Preparing download...", self.accent_color)
-        self._set_stage("Initializing")
-        self._set_progress(0)
-        self.download_button.configure(state="disabled")
+        self._set_stage("Initializing (phase 1 of 4)")
+        self._set_progress(None)
+        self.download_button.configure(text="Start Download", state="disabled")
         self.cancel_button.configure(state="normal")
 
         self.worker_thread = threading.Thread(
@@ -394,12 +570,16 @@ class YouTubeDownloaderApp:
         self.cancel_requested = True
         self._set_status("Cancellation requested...", "#ffbf00")
         self._append_log("Cancellation requested by user.")
+        self.cancel_button.configure(text="Stopping...", state="disabled")
         if self.active_process and self.active_process.poll() is None:
             self.active_process.terminate()
 
     # ------------------------------------------------------------------ Pipeline
     def _run_pipeline(self, url: str, destination: str):
         temp_dir = tempfile.mkdtemp(prefix="unifi_dl_")
+        final_status: Optional[str] = None
+        final_color = "#ff6b6b"
+        retry = False
         try:
             video_path, audio_path, metadata, video_fmt, audio_fmt = self._download_media(url, temp_dir)
             if self.cancel_requested:
@@ -407,86 +587,225 @@ class YouTubeDownloaderApp:
             output_path = self._transcode_and_mux(
                 video_path, audio_path, metadata, destination, video_fmt, audio_fmt
             )
-            self._set_status(f"Completed: {os.path.basename(output_path)}", "#4dcc7d")
+            final_status, final_color = completion_status(
+                output_path, oversized=getattr(self, "_last_output_warning", False)
+            )
+            if self.cancel_requested:
+                final_status += " (Cancellation arrived after finalization; output preserved.)"
+                final_color = "#ffbf00"
+                self._append_log("Cancellation arrived after final output was published; output preserved.")
+            self._set_status(final_status, final_color)
             self._append_log(f"Saved final file to {output_path}")
         except DownloadCancelled:
-            self._set_status("Download cancelled.", "#ff6b6b")
+            final_status = "Download cancelled. No completed file was saved."
+            final_color = "#ff6b6b"
+            self._set_status(final_status, final_color)
             self._append_log("Operation cancelled.")
+        except PipelineError as exc:
+            retry = True
+            final_status = f"Error: {exc.user_message}"
+            final_color = "#ff6b6b"
+            self._set_status(final_status, final_color)
+            self._append_log(f"Failed during {exc.stage}: {exc.detail}")
         except Exception as exc:
-            self._set_status(f"Error: {exc}", "#ff6b6b")
-            self._append_log(f"Error: {exc}")
+            retry = True
+            detail = safe_error_detail(exc)
+            final_status = "Error: The download could not be completed. Try again."
+            final_color = "#ff6b6b"
+            self._set_status(final_status, final_color)
+            self._append_log(f"Unexpected pipeline error: {detail}")
         finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            self.root.after(0, self._reset_controls)
+            try:
+                shutil.rmtree(temp_dir)
+            except OSError as exc:
+                self._append_log(f"Cleanup warning: {safe_error_detail(exc)}")
+                if final_status:
+                    final_status = (
+                        f"{final_status} Warning: temporary files could not be removed; "
+                        "leftover temporary files may remain on disk."
+                    )
+                    self._set_status(
+                        final_status,
+                        "#ffbf00" if final_color == "#4dcc7d" else final_color,
+                    )
+            self.root.after(0, lambda: self._reset_controls(retry=retry))
 
-    def _download_media(self, url: str, temp_dir: str) -> Tuple[str, str, Dict, Dict, Dict]:
-        self._set_stage("Fetching metadata")
+    def _check_cancelled(self):
+        if self.cancel_requested:
+            raise DownloadCancelled()
+
+    def _wait_before_retry(self, seconds: float):
+        self._set_stage(f"Waiting to retry in {int(seconds)} seconds")
+        self._set_status("Waiting to retry. Cancel to stop.", "#ffbf00")
+        deadline = time.monotonic() + seconds
+        while True:
+            self._check_cancelled()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.1, remaining))
+
+    def _cleanup_temp_files(self, temp_dir: str):
+        for name in os.listdir(temp_dir):
+            path = os.path.join(temp_dir, name)
+            try:
+                if os.path.isdir(path) and not os.path.islink(path):
+                    shutil.rmtree(path)
+                else:
+                    os.unlink(path)
+            except FileNotFoundError:
+                continue
+
+    def _resolve_media(self, url: str) -> Tuple[Dict, Dict, Dict]:
+        self._check_cancelled()
+        self._set_stage("Fetching metadata (phase 2 of 4)")
         self._append_log("Fetching video information...")
+        if yt_dlp is None:
+            raise PipelineError(
+                "metadata",
+                "yt-dlp is required. Install the requirements, then try again.",
+                safe_error_detail(YT_DLP_IMPORT_ERROR or ImportError("yt-dlp is unavailable")),
+            )
         ydl_opts = {
             "quiet": True,
             "skip_download": True,
             "noplaylist": False,
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            metadata = ydl.extract_info(url, download=False)
-        best_video, best_audio = pick_best_formats(metadata)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                metadata = ydl.extract_info(url, download=False)
+            if is_playlist_metadata(metadata):
+                raise PipelineError(
+                    "metadata",
+                    "Playlist URLs are not supported. Enter a single-video URL.",
+                    "Extractor returned playlist metadata for a single-video-only request.",
+                )
+            best_video, best_audio = pick_best_formats(metadata)
+        except DownloadCancelled:
+            raise
+        except PipelineError:
+            raise
+        except Exception as exc:
+            detail = safe_error_detail(exc)
+            status_code = ytdlp_status_code(exc)
+            raise PipelineError(
+                "metadata",
+                metadata_error_message(status_code),
+                detail,
+            ) from exc
         self._append_log(
             f"Selected video {best_video.get('format_id')} ({best_video.get('height')}p) "
             f"and audio {best_audio.get('format_id')} ({best_audio.get('abr') or best_audio.get('tbr')} kbps)."
         )
-        total_duration = metadata.get("duration") or 0
-        estimated_size = total_duration * (TARGET_VIDEO_BITRATE + TARGET_AUDIO_BITRATE) / 8
-        if estimated_size > MAX_FILE_BYTES:
-            self._append_log(
-                f"Warning: estimated size {human_readable_size(estimated_size)} exceeds 5 GB limit."
-            )
+        return metadata, best_video, best_audio
 
-        video_path = self._download_stream(url, best_video["format_id"], temp_dir, "video")
-        audio_path = self._download_stream(url, best_audio["format_id"], temp_dir, "audio")
-        return video_path, audio_path, metadata, best_video, best_audio
+    def _download_media(self, url: str, temp_dir: str) -> Tuple[str, str, Dict, Dict, Dict]:
+        last_error: Optional[PipelineError] = None
+        for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
+            if attempt > 1:
+                delay = RETRY_BACKOFF_SECONDS[min(attempt - 2, len(RETRY_BACKOFF_SECONDS) - 1)]
+                self._wait_before_retry(delay)
+            self._check_cancelled()
+            try:
+                metadata, best_video, best_audio = self._resolve_media(url)
+                total_duration = metadata.get("duration") or 0
+                estimated_size = total_duration * (TARGET_VIDEO_BITRATE + TARGET_AUDIO_BITRATE) / 8
+                if estimated_size > MAX_FILE_BYTES:
+                    self._append_log(
+                        f"Warning: estimated size {human_readable_size(estimated_size)} exceeds 5 GB limit."
+                    )
+                video_path = self._download_stream(url, best_video["format_id"], temp_dir, "video")
+                audio_path = self._download_stream(url, best_audio["format_id"], temp_dir, "audio")
+                return video_path, audio_path, metadata, best_video, best_audio
+            except DownloadCancelled:
+                raise
+            except PipelineError as exc:
+                last_error = exc
+                self._cleanup_temp_files(temp_dir)
+                if not exc.retryable or attempt >= MAX_DOWNLOAD_ATTEMPTS:
+                    raise
+                self._append_log(
+                    f"{exc.stage.capitalize()} failed; refreshing stream details "
+                    f"(attempt {attempt + 1} of {MAX_DOWNLOAD_ATTEMPTS})."
+                )
+                if isinstance(exc, StreamDownloadError) and exc.status_code == 403:
+                    retry_status = (
+                        f"{exc.label.capitalize()} stream access was refused (HTTP 403). "
+                        "Trying one bounded, best-effort refresh of stream details; "
+                        "this cannot bypass access or service restrictions..."
+                    )
+                else:
+                    retry_status = (
+                        "Download interrupted. Retrying once with fresh stream details "
+                        f"(attempt {attempt + 1} of {MAX_DOWNLOAD_ATTEMPTS})..."
+                    )
+                self._set_status(retry_status, "#ffbf00")
+        raise last_error or RuntimeError("Download failed without a classified error.")
 
     def _download_stream(self, url: str, format_id: str, temp_dir: str, label: str) -> str:
-        if self.cancel_requested:
-            raise DownloadCancelled()
+        self._check_cancelled()
 
         target_template = os.path.join(temp_dir, f"{label}.%(ext)s")
         downloaded = {"path": None}
+        progress_mode: Optional[str] = None
 
         def hook(d):
+            nonlocal progress_mode
             if self.cancel_requested:
                 raise DownloadCancelled()
             status = d.get("status")
             if status == "downloading":
                 downloaded_bytes = d.get("downloaded_bytes", 0)
                 total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-                percent = int(downloaded_bytes / total_bytes * 100) if total_bytes else 0
                 speed = d.get("speed")
                 if speed:
                     speed_mbps = speed * 8 / 1_000_000
                     stage = f"Downloading {label} stream @ {speed_mbps:.1f} Mbps"
                 else:
                     stage = f"Downloading {label} stream"
-                self._set_stage(stage)
-                self._set_progress(percent)
+                if total_bytes:
+                    progress_mode = "determinate"
+                    percent = int(downloaded_bytes / total_bytes * 100)
+                    self._set_stage(stage)
+                    self._set_progress(percent)
+                else:
+                    self._set_stage(f"{stage} (progress unavailable)")
+                    if progress_mode != "indeterminate":
+                        self._set_progress(None)
+                        progress_mode = "indeterminate"
             elif status == "finished":
                 downloaded["path"] = d.get("filename")
                 self._append_log(f"{label.capitalize()} download finished: {downloaded['path']}")
 
         ydl_opts = {
             "quiet": True,
-            "nocheckcertificate": True,
             "noplaylist": True,
             "format": format_id,
             "outtmpl": target_template,
             "progress_hooks": [hook],
             "windowsfilenames": True,
+            "retries": 1,
+            "fragment_retries": 1,
+            "socket_timeout": 30,
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        if yt_dlp is None:
+            raise PipelineError(
+                f"{label} download",
+                "yt-dlp is required. Install the requirements, then try again.",
+                safe_error_detail(YT_DLP_IMPORT_ERROR or ImportError("yt-dlp is unavailable")),
+            )
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except DownloadCancelled:
+            raise
+        except Exception as exc:
+            status_code = ytdlp_status_code(exc)
+            raise StreamDownloadError(label, safe_error_detail(exc), status_code=status_code) from exc
 
         file_path = downloaded["path"]
-        if not file_path or not os.path.exists(file_path):
-            raise RuntimeError(f"Failed to download {label} stream.")
+        if not file_path or not os.path.isfile(file_path):
+            raise StreamDownloadError(label, f"yt-dlp did not produce a {label} file.")
         return file_path
 
     def _execute_ffmpeg(
@@ -497,24 +816,50 @@ class YouTubeDownloaderApp:
         start_progress: int,
         end_progress: int,
     ):
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            universal_newlines=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        self.active_process = process
-        last_log = 0.0
-        fallback_progress = start_progress
         try:
-            for line in process.stdout:
-                if self.cancel_requested and process.poll() is None:
-                    process.terminate()
-                    process.wait()
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                universal_newlines=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError as exc:
+            raise RuntimeError(f"Unable to start FFmpeg during {stage_label.lower()}.") from exc
+        self.active_process = process
+        output_queue: queue.Queue[Optional[str]] = queue.Queue()
+
+        def read_output():
+            try:
+                for line in process.stdout or ():
+                    output_queue.put(line)
+            except (OSError, ValueError):
+                # The cancellation cleanup may close a pipe while this reader exits.
+                pass
+            finally:
+                output_queue.put(None)
+
+        reader = threading.Thread(target=read_output, name="ffmpeg-output-reader", daemon=True)
+        reader.start()
+        last_log = 0.0
+        if duration:
+            self._set_progress(start_progress)
+        else:
+            self._set_stage(f"{stage_label} (progress unavailable)")
+            self._set_progress(None)
+        try:
+            while True:
+                if self.cancel_requested:
+                    self._stop_ffmpeg_process(process)
                     raise DownloadCancelled()
+                try:
+                    line = output_queue.get(timeout=FFMPEG_READER_POLL_SECONDS)
+                except queue.Empty:
+                    continue
+                if line is None:
+                    break
                 line = (line or "").strip()
                 if not line:
                     continue
@@ -523,9 +868,6 @@ class YouTubeDownloaderApp:
                     fraction = min(1.0, timestamp / duration)
                     progress_value = int(start_progress + fraction * (end_progress - start_progress))
                     self._set_progress(progress_value)
-                elif not duration:
-                    fallback_progress = min(end_progress, fallback_progress + 1)
-                    self._set_progress(fallback_progress)
                 bitrate_match = re.search(r"bitrate=\s*([\d.]+)kbits/s", line)
                 if bitrate_match:
                     bitrate_mbps = float(bitrate_match.group(1)) / 1000
@@ -535,12 +877,33 @@ class YouTubeDownloaderApp:
                     self._append_log(f"{stage_label}: {line}")
                     last_log = now
         finally:
+            if self.cancel_requested:
+                self._stop_ffmpeg_process(process)
+            reader.join(timeout=FFMPEG_CANCEL_GRACE_SECONDS)
+            if reader.is_alive() and process.stdout is not None:
+                process.stdout.close()
+                reader.join(timeout=FFMPEG_CANCEL_GRACE_SECONDS)
+            elif process.stdout is not None:
+                process.stdout.close()
             self.active_process = None
 
         return_code = process.wait()
+        if self.cancel_requested:
+            raise DownloadCancelled()
         if return_code != 0:
             raise RuntimeError(f"FFmpeg failed during {stage_label.lower()} (exit code {return_code}).")
         self._set_progress(end_progress)
+
+    @staticmethod
+    def _stop_ffmpeg_process(process: subprocess.Popen):
+        """Stop FFmpeg promptly, escalating when it ignores a graceful signal."""
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=FFMPEG_CANCEL_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=FFMPEG_CANCEL_GRACE_SECONDS)
 
     def _remux_passthrough(
         self, video_path: str, audio_path: str, output_path: str, duration: Optional[float]
@@ -573,6 +936,29 @@ class YouTubeDownloaderApp:
             end_progress=95,
         )
 
+    def _create_staging_output(self, destination: str) -> str:
+        os.makedirs(destination, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix=".unifi_dl_", suffix=".mp4", dir=destination)
+        os.close(fd)
+        os.unlink(path)
+        return path
+
+    def _finalize_output(self, staged_path: str, destination: str, base_name: str) -> str:
+        """Publish a completed staged file without overwriting an existing output."""
+        while True:
+            output_path = ensure_unique_path(destination, base_name)
+            try:
+                os.link(staged_path, output_path)
+            except FileExistsError:
+                continue
+            try:
+                os.unlink(staged_path)
+            except OSError as exc:
+                self._append_log(f"Output staging cleanup warning: {safe_error_detail(exc)}")
+            if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
+                raise RuntimeError("Final output could not be verified after publishing.")
+            return output_path
+
     def _transcode_and_mux(
         self,
         video_path: str,
@@ -584,132 +970,141 @@ class YouTubeDownloaderApp:
     ) -> str:
         source_title = metadata.get("title") or "YouTube Video"
         safe_name = sanitize_filename(source_title)
-        output_path = ensure_unique_path(destination, safe_name)
-
-        duration = metadata.get("duration") or 0
-        if should_passthrough(video_fmt, audio_fmt):
-            self._append_log("Stream already meets Unifi requirements. Remuxing without re-encode.")
-            self._set_stage("Remuxing (no transcode needed)")
-            self._set_progress(70)
-            self._remux_passthrough(video_path, audio_path, output_path, duration)
-            final_size = os.path.getsize(output_path)
-            self._append_log(f"Remux complete. Final size: {human_readable_size(final_size)}")
-            self._set_progress(100)
-            return output_path
-
-        source_fps = video_fmt.get("fps") or metadata.get("fps") or metadata.get("average_fps")
-        target_fps = choose_target_fps(source_fps)
-        needs_fps_change = bool(source_fps) and round(source_fps) not in ALLOWED_FPS
-
-        video_codec = "h264_nvenc" if self.env_status.nvenc_available else "libx264"
-        encoder_note = "NVENC p4" if video_codec == "h264_nvenc" else "x264 medium"
-        self._append_log(
-            f"Transcoding to Unifi profile ({encoder_note}, target {target_fps} FPS, 40 Mbps video / 192 kbps audio)."
-        )
-        self._set_stage("Transcoding and packaging")
-        self._set_progress(15)
-
-        ffmpeg_bin = self.env_status.ffmpeg_path or "ffmpeg"
-        start_args = [
-            ffmpeg_bin,
-            "-y",
-            "-i",
-            video_path,
-            "-i",
-            audio_path,
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a:0",
-        ]
-
-        def build_cmd(codec: str) -> list[str]:
-            cmd = start_args + ["-c:v", codec]
-            if codec == "h264_nvenc":
-                cmd += [
-                    "-preset",
-                    "p4",
-                    "-rc:v",
-                    "vbr_hq",
-                    "-cq",
-                    "19",
-                    "-b:v",
-                    f"{TARGET_VIDEO_BITRATE}",
-                    "-maxrate",
-                    f"{int(TARGET_VIDEO_BITRATE * 1.15)}",
-                    "-bufsize",
-                    f"{TARGET_VIDEO_BITRATE * 2}",
-                ]
-            else:
-                cmd += [
-                    "-preset",
-                    "medium",
-                    "-crf",
-                    "18",
-                    "-b:v",
-                    f"{TARGET_VIDEO_BITRATE}",
-                    "-maxrate",
-                    f"{int(TARGET_VIDEO_BITRATE * 1.15)}",
-                    "-bufsize",
-                    f"{TARGET_VIDEO_BITRATE * 2}",
-                ]
-
-            cmd += [
-                "-profile:v",
-                "high",
-                "-pix_fmt",
-                "yuv420p",
-            ]
-
-            if needs_fps_change:
-                cmd += ["-r", str(target_fps)]
-
-            cmd += [
-                "-c:a",
-                "aac",
-                "-b:a",
-                f"{TARGET_AUDIO_BITRATE}",
-                "-ac",
-                "2",
-                "-movflags",
-                "+faststart",
-                output_path,
-            ]
-            return cmd
-
-        cmd = build_cmd(video_codec)
+        staged_path: Optional[str] = None
+        self._last_output_warning = False
         try:
-            self._execute_ffmpeg(
-                cmd,
-                stage_label="Transcoding",
-                duration=duration or None,
-                start_progress=20,
-                end_progress=98,
-            )
-        except RuntimeError as exc:
-            if video_codec == "h264_nvenc":
-                self._append_log(f"NVENC failed ({exc}). Retrying with CPU x264.")
-                self._set_status("NVENC unavailable. Retrying on CPU...", "#ffbf00")
-                fallback_cmd = build_cmd("libx264")
-                self._execute_ffmpeg(
-                    fallback_cmd,
-                    stage_label="CPU Transcoding",
-                    duration=duration or None,
-                    start_progress=20,
-                    end_progress=98,
+            staged_path = self._create_staging_output(destination)
+            duration = metadata.get("duration") or 0
+            if should_passthrough(video_fmt, audio_fmt):
+                self._append_log("Stream already meets Unifi requirements. Remuxing without re-encode.")
+                self._set_stage("Remuxing (no transcode needed)")
+                self._set_progress(70)
+                self._remux_passthrough(video_path, audio_path, staged_path, duration)
+            else:
+                source_fps = video_fmt.get("fps") or metadata.get("fps") or metadata.get("average_fps")
+                target_fps = choose_target_fps(source_fps)
+                needs_fps_change = bool(source_fps) and round(source_fps) not in ALLOWED_FPS
+
+                video_codec = "h264_nvenc" if self.env_status.nvenc_available else "libx264"
+                encoder_note = "NVENC p4" if video_codec == "h264_nvenc" else "x264 medium"
+                self._append_log(
+                    f"Transcoding to Unifi profile ({encoder_note}, target {target_fps} FPS, 40 Mbps video / 192 kbps audio)."
+                )
+                self._set_stage("Transcoding and packaging")
+                self._set_progress(15)
+
+                ffmpeg_bin = self.env_status.ffmpeg_path or "ffmpeg"
+                start_args = [
+                    ffmpeg_bin,
+                    "-y",
+                    "-i",
+                    video_path,
+                    "-i",
+                    audio_path,
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "1:a:0",
+                ]
+
+                def build_cmd(codec: str) -> list[str]:
+                    cmd = start_args + ["-c:v", codec]
+                    if codec == "h264_nvenc":
+                        cmd += [
+                            "-preset",
+                            "p4",
+                            "-rc:v",
+                            "vbr_hq",
+                            "-cq",
+                            "19",
+                            "-b:v",
+                            f"{TARGET_VIDEO_BITRATE}",
+                            "-maxrate",
+                            f"{int(TARGET_VIDEO_BITRATE * 1.15)}",
+                            "-bufsize",
+                            f"{TARGET_VIDEO_BITRATE * 2}",
+                        ]
+                    else:
+                        cmd += [
+                            "-preset",
+                            "medium",
+                            "-crf",
+                            "18",
+                            "-b:v",
+                            f"{TARGET_VIDEO_BITRATE}",
+                            "-maxrate",
+                            f"{int(TARGET_VIDEO_BITRATE * 1.15)}",
+                            "-bufsize",
+                            f"{TARGET_VIDEO_BITRATE * 2}",
+                        ]
+
+                    cmd += ["-profile:v", "high", "-pix_fmt", "yuv420p"]
+                    if needs_fps_change:
+                        cmd += ["-r", str(target_fps)]
+                    return cmd + [
+                        "-c:a",
+                        "aac",
+                        "-b:a",
+                        f"{TARGET_AUDIO_BITRATE}",
+                        "-ac",
+                        "2",
+                        "-movflags",
+                        "+faststart",
+                        staged_path,
+                    ]
+
+                cmd = build_cmd(video_codec)
+                try:
+                    self._execute_ffmpeg(
+                        cmd,
+                        stage_label="Transcoding",
+                        duration=duration or None,
+                        start_progress=20,
+                        end_progress=98,
+                    )
+                except RuntimeError as exc:
+                    if video_codec != "h264_nvenc":
+                        raise
+                    self._append_log(f"NVENC failed ({safe_error_detail(exc)}). Retrying with CPU x264.")
+                    self._set_status("NVENC unavailable. Retrying on CPU...", "#ffbf00")
+                    fallback_cmd = build_cmd("libx264")
+                    self._execute_ffmpeg(
+                        fallback_cmd,
+                        stage_label="CPU Transcoding",
+                        duration=duration or None,
+                        start_progress=20,
+                        end_progress=98,
+                    )
+
+            if not staged_path or not os.path.isfile(staged_path) or os.path.getsize(staged_path) <= 0:
+                raise RuntimeError("FFmpeg did not produce a non-empty output file.")
+            final_size = os.path.getsize(staged_path)
+            self._last_output_warning = final_size > MAX_FILE_BYTES
+            if self._last_output_warning:
+                self._append_log(
+                    f"Warning: Final file is {human_readable_size(final_size)}, which exceeds Unifi's 5 GB limit."
                 )
             else:
-                raise
-
-        final_size = os.path.getsize(output_path)
-        if final_size > MAX_FILE_BYTES:
-            self._append_log(
-                f"Warning: Final file is {human_readable_size(final_size)}, which exceeds Unifi's 5 GB limit."
-            )
-        else:
-            self._append_log(f"Final file size: {human_readable_size(final_size)}")
-        self._set_progress(100)
-        return output_path
+                self._append_log(f"Final file size: {human_readable_size(final_size)}")
+            output_path = self._finalize_output(staged_path, destination, safe_name)
+            self._set_progress(100)
+            return output_path
+        except DownloadCancelled:
+            raise
+        except PipelineError:
+            raise
+        except Exception as exc:
+            raise PipelineError(
+                "FFmpeg",
+                "Couldn't create a Unifi-ready MP4. Check the FFmpeg setup and available disk space, then try again.",
+                safe_error_detail(exc),
+            ) from exc
+        finally:
+            if staged_path and os.path.exists(staged_path):
+                try:
+                    os.unlink(staged_path)
+                except OSError as exc:
+                    self._append_log(f"Output cleanup warning: {safe_error_detail(exc)}")
 
 
 if __name__ == "__main__":

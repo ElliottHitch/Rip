@@ -1,2 +1,2 @@
-# Pull the latest yt-dlp (nightly) for continued compatibility with YouTube changes
-yt-dlp @ git+https://github.com/yt-dlp/yt-dlp@master
+# Pin a reviewed stable yt-dlp release for reproducible installs.
+yt-dlp==2026.8.19
