@@ -51,12 +51,18 @@ class StreamDownloadError(PipelineError):
     """A stream failure that may be recoverable by fresh extraction."""
 
     def __init__(self, label: str, detail: str, *, status_code: Optional[int] = None):
-        forbidden = status_code == 403
-        if forbidden:
+        label_title = label.capitalize()
+        if status_code == 403:
             user_message = (
-                "The stream was refused (HTTP 403). We couldn't refresh it safely. "
-                "Check that the video is publicly available and that downloads are permitted, "
-                "then try again."
+                f"{label_title} stream access was refused (HTTP 403). One bounded, best-effort "
+                "refresh of stream details did not resolve it. This may reflect access, login, "
+                "age, region, policy, PO-token, or rate restrictions; the app does not bypass "
+                "service restrictions. Check that the video is available to you, then try again."
+            )
+        elif status_code == 429:
+            user_message = (
+                f"{label_title} stream was rate-limited (HTTP 429). The app will not retry "
+                "automatically. Wait before trying again and avoid repeated requests."
             )
         else:
             user_message = "The connection could not be completed. Check your network connection and try again."
@@ -64,10 +70,42 @@ class StreamDownloadError(PipelineError):
             f"{label} download",
             user_message,
             detail,
-            retryable=forbidden or status_code is None or 500 <= status_code < 600,
+            retryable=status_code == 403 or status_code is None or 500 <= (status_code or 0) < 600,
         )
         self.label = label
         self.status_code = status_code
+
+
+def metadata_error_message(status_code: Optional[int]) -> str:
+    """Return truthful, stage-specific metadata failure guidance."""
+    if status_code == 403:
+        return (
+            "Metadata access was refused (HTTP 403). Check that the video is available to you; "
+            "the app does not bypass login, age, region, policy, or other service restrictions."
+        )
+    if status_code == 429:
+        return (
+            "Metadata was rate-limited (HTTP 429). The app will not retry automatically; "
+            "wait before trying again and avoid repeated requests."
+        )
+    return "Couldn't read this URL. Check the link and your connection, then try again."
+
+
+def completion_status(output_path: str, *, oversized: bool = False) -> Tuple[str, str]:
+    """Build the visible completion state and its semantic color."""
+    filename = os.path.basename(output_path)
+    if oversized:
+        return (
+            f"Completed with warning: {filename} was saved, but it is not Unifi-compliant "
+            "because it exceeds the 5 GB single-file limit.",
+            "#ffbf00",
+        )
+    return f"Completed: {filename}", "#4dcc7d"
+
+
+def is_playlist_metadata(metadata: Dict) -> bool:
+    """Identify extractor results that represent more than one video."""
+    return metadata.get("_type") in {"playlist", "multi_video"}
 
 
 def safe_error_detail(exc: BaseException) -> str:
@@ -286,6 +324,7 @@ class YouTubeDownloaderApp:
         self.status_var = tk.StringVar(value="Ready.")
         self.progress_var = tk.IntVar(value=0)
         self.env_summary_var = tk.StringVar()
+        self._last_output_warning = False
 
         self._build_theme()
         self._build_ui()
@@ -319,7 +358,7 @@ class YouTubeDownloaderApp:
         self.main_frame.pack(fill="both", expand=True)
         self.main_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(self.main_frame, text="YouTube / Playlist URL").grid(row=0, column=0, sticky="w")
+        ttk.Label(self.main_frame, text="YouTube video URL (single video only)").grid(row=0, column=0, sticky="w")
         self.url_entry = ttk.Entry(self.main_frame, textvariable=self.url_var, width=80)
         self.url_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=5)
 
@@ -343,11 +382,18 @@ class YouTubeDownloaderApp:
         )
 
         self.progress_bar = ttk.Progressbar(
-            self.main_frame, maximum=100, variable=self.progress_var, style="Green.Horizontal.TProgressbar"
+            self.main_frame, maximum=100, variable=self.progress_var, mode="determinate", style="Green.Horizontal.TProgressbar"
         )
         self.progress_bar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=8)
 
-        self.status_label = ttk.Label(self.main_frame, textvariable=self.status_var, font=("Segoe UI", 10, "bold"))
+        self.status_label = ttk.Label(
+            self.main_frame,
+            textvariable=self.status_var,
+            font=("Segoe UI", 10, "bold"),
+            wraplength=680,
+            justify="left",
+            anchor="w",
+        )
         self.status_label.grid(row=5, column=0, columnspan=3, sticky="w")
 
         env_frame = ttk.LabelFrame(self.main_frame, text="Environment", padding=10)
@@ -386,9 +432,22 @@ class YouTubeDownloaderApp:
 
         self.root.after(0, _update)
 
-    def _set_progress(self, value: int):
+    def _set_progress(self, value: Optional[int]):
+        if value is None:
+            self.root.after(0, self._show_indeterminate_progress)
+            return
         value = max(0, min(100, value))
-        self.root.after(0, lambda: self.progress_var.set(value))
+        self.root.after(0, lambda: self._show_determinate_progress(value))
+
+    def _show_indeterminate_progress(self):
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode="indeterminate")
+        self.progress_bar.start(12)
+
+    def _show_determinate_progress(self, value: int):
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode="determinate")
+        self.progress_var.set(value)
 
     def _append_log(self, message: str):
         timestamp = time.strftime("%H:%M:%S")
@@ -401,10 +460,14 @@ class YouTubeDownloaderApp:
         self.log_widget.see("end")
         self.log_widget.configure(state="disabled")
 
-    def _reset_controls(self):
-        self.download_button.configure(state="normal")
-        self.cancel_button.configure(text="Cancel")
-        self.cancel_button.configure(state="disabled")
+    def _reset_controls(self, *, retry: bool = False):
+        self.download_button.configure(
+            text="Try Again" if retry else "Start Download",
+            state="normal",
+        )
+        self.cancel_button.configure(text="Cancel", state="disabled")
+        if retry:
+            self.download_button.focus_set()
 
     def _handle_test_environment(self):
         self.env_status = probe_environment()
@@ -462,7 +525,7 @@ class YouTubeDownloaderApp:
         url = self.url_var.get().strip()
         destination = self.path_var.get().strip()
         if not url:
-            self._set_status("Enter a video or playlist URL.", "#ff6b6b")
+            self._set_status("Enter a single-video URL.", "#ff6b6b")
             return
         if not destination:
             self._set_status("Select a download directory.", "#ff6b6b")
@@ -489,10 +552,11 @@ class YouTubeDownloaderApp:
             return
 
         self.cancel_requested = False
+        self._last_output_warning = False
         self._set_status("Preparing download...", self.accent_color)
-        self._set_stage("Initializing")
-        self._set_progress(0)
-        self.download_button.configure(state="disabled")
+        self._set_stage("Initializing (phase 1 of 4)")
+        self._set_progress(None)
+        self.download_button.configure(text="Start Download", state="disabled")
         self.cancel_button.configure(state="normal")
 
         self.worker_thread = threading.Thread(
@@ -513,6 +577,9 @@ class YouTubeDownloaderApp:
     # ------------------------------------------------------------------ Pipeline
     def _run_pipeline(self, url: str, destination: str):
         temp_dir = tempfile.mkdtemp(prefix="unifi_dl_")
+        final_status: Optional[str] = None
+        final_color = "#ff6b6b"
+        retry = False
         try:
             video_path, audio_path, metadata, video_fmt, audio_fmt = self._download_media(url, temp_dir)
             if self.cancel_requested:
@@ -520,28 +587,48 @@ class YouTubeDownloaderApp:
             output_path = self._transcode_and_mux(
                 video_path, audio_path, metadata, destination, video_fmt, audio_fmt
             )
-            self._set_status(f"Completed: {os.path.basename(output_path)}", "#4dcc7d")
+            final_status, final_color = completion_status(
+                output_path, oversized=getattr(self, "_last_output_warning", False)
+            )
+            if self.cancel_requested:
+                final_status += " (Cancellation arrived after finalization; output preserved.)"
+                final_color = "#ffbf00"
+                self._append_log("Cancellation arrived after final output was published; output preserved.")
+            self._set_status(final_status, final_color)
             self._append_log(f"Saved final file to {output_path}")
         except DownloadCancelled:
-            self._set_status("Download cancelled. No completed file was saved.", "#ff6b6b")
+            final_status = "Download cancelled. No completed file was saved."
+            final_color = "#ff6b6b"
+            self._set_status(final_status, final_color)
             self._append_log("Operation cancelled.")
         except PipelineError as exc:
-            self._set_status(f"Error: {exc.user_message}", "#ff6b6b")
+            retry = True
+            final_status = f"Error: {exc.user_message}"
+            final_color = "#ff6b6b"
+            self._set_status(final_status, final_color)
             self._append_log(f"Failed during {exc.stage}: {exc.detail}")
         except Exception as exc:
+            retry = True
             detail = safe_error_detail(exc)
-            self._set_status("Error: The download could not be completed. Try again.", "#ff6b6b")
+            final_status = "Error: The download could not be completed. Try again."
+            final_color = "#ff6b6b"
+            self._set_status(final_status, final_color)
             self._append_log(f"Unexpected pipeline error: {detail}")
         finally:
             try:
                 shutil.rmtree(temp_dir)
             except OSError as exc:
                 self._append_log(f"Cleanup warning: {safe_error_detail(exc)}")
-                self._set_status(
-                    "Download stopped, but temporary files could not be removed. Open Folder to review the destination.",
-                    "#ffbf00",
-                )
-            self.root.after(0, self._reset_controls)
+                if final_status:
+                    final_status = (
+                        f"{final_status} Warning: temporary files could not be removed; "
+                        "leftover temporary files may remain on disk."
+                    )
+                    self._set_status(
+                        final_status,
+                        "#ffbf00" if final_color == "#4dcc7d" else final_color,
+                    )
+            self.root.after(0, lambda: self._reset_controls(retry=retry))
 
     def _check_cancelled(self):
         if self.cancel_requested:
@@ -571,7 +658,7 @@ class YouTubeDownloaderApp:
 
     def _resolve_media(self, url: str) -> Tuple[Dict, Dict, Dict]:
         self._check_cancelled()
-        self._set_stage("Fetching metadata")
+        self._set_stage("Fetching metadata (phase 2 of 4)")
         self._append_log("Fetching video information...")
         if yt_dlp is None:
             raise PipelineError(
@@ -587,14 +674,23 @@ class YouTubeDownloaderApp:
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 metadata = ydl.extract_info(url, download=False)
+            if is_playlist_metadata(metadata):
+                raise PipelineError(
+                    "metadata",
+                    "Playlist URLs are not supported. Enter a single-video URL.",
+                    "Extractor returned playlist metadata for a single-video-only request.",
+                )
             best_video, best_audio = pick_best_formats(metadata)
         except DownloadCancelled:
             raise
+        except PipelineError:
+            raise
         except Exception as exc:
             detail = safe_error_detail(exc)
+            status_code = ytdlp_status_code(exc)
             raise PipelineError(
                 "metadata",
-                "Couldn't read this URL. Check the link and your connection, then try again.",
+                metadata_error_message(status_code),
                 detail,
             ) from exc
         self._append_log(
@@ -632,11 +728,18 @@ class YouTubeDownloaderApp:
                     f"{exc.stage.capitalize()} failed; refreshing stream details "
                     f"(attempt {attempt + 1} of {MAX_DOWNLOAD_ATTEMPTS})."
                 )
-                self._set_status(
-                    "Download interrupted. Refreshing stream details "
-                    f"(attempt {attempt + 1} of {MAX_DOWNLOAD_ATTEMPTS})...",
-                    "#ffbf00",
-                )
+                if isinstance(exc, StreamDownloadError) and exc.status_code == 403:
+                    retry_status = (
+                        f"{exc.label.capitalize()} stream access was refused (HTTP 403). "
+                        "Trying one bounded, best-effort refresh of stream details; "
+                        "this cannot bypass access or service restrictions..."
+                    )
+                else:
+                    retry_status = (
+                        "Download interrupted. Retrying once with fresh stream details "
+                        f"(attempt {attempt + 1} of {MAX_DOWNLOAD_ATTEMPTS})..."
+                    )
+                self._set_status(retry_status, "#ffbf00")
         raise last_error or RuntimeError("Download failed without a classified error.")
 
     def _download_stream(self, url: str, format_id: str, temp_dir: str, label: str) -> str:
@@ -644,23 +747,32 @@ class YouTubeDownloaderApp:
 
         target_template = os.path.join(temp_dir, f"{label}.%(ext)s")
         downloaded = {"path": None}
+        progress_mode: Optional[str] = None
 
         def hook(d):
+            nonlocal progress_mode
             if self.cancel_requested:
                 raise DownloadCancelled()
             status = d.get("status")
             if status == "downloading":
                 downloaded_bytes = d.get("downloaded_bytes", 0)
                 total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-                percent = int(downloaded_bytes / total_bytes * 100) if total_bytes else 0
                 speed = d.get("speed")
                 if speed:
                     speed_mbps = speed * 8 / 1_000_000
                     stage = f"Downloading {label} stream @ {speed_mbps:.1f} Mbps"
                 else:
                     stage = f"Downloading {label} stream"
-                self._set_stage(stage)
-                self._set_progress(percent)
+                if total_bytes:
+                    progress_mode = "determinate"
+                    percent = int(downloaded_bytes / total_bytes * 100)
+                    self._set_stage(stage)
+                    self._set_progress(percent)
+                else:
+                    self._set_stage(f"{stage} (progress unavailable)")
+                    if progress_mode != "indeterminate":
+                        self._set_progress(None)
+                        progress_mode = "indeterminate"
             elif status == "finished":
                 downloaded["path"] = d.get("filename")
                 self._append_log(f"{label.capitalize()} download finished: {downloaded['path']}")
@@ -732,7 +844,11 @@ class YouTubeDownloaderApp:
         reader = threading.Thread(target=read_output, name="ffmpeg-output-reader", daemon=True)
         reader.start()
         last_log = 0.0
-        fallback_progress = start_progress
+        if duration:
+            self._set_progress(start_progress)
+        else:
+            self._set_stage(f"{stage_label} (progress unavailable)")
+            self._set_progress(None)
         try:
             while True:
                 if self.cancel_requested:
@@ -752,9 +868,6 @@ class YouTubeDownloaderApp:
                     fraction = min(1.0, timestamp / duration)
                     progress_value = int(start_progress + fraction * (end_progress - start_progress))
                     self._set_progress(progress_value)
-                elif not duration:
-                    fallback_progress = min(end_progress, fallback_progress + 1)
-                    self._set_progress(fallback_progress)
                 bitrate_match = re.search(r"bitrate=\s*([\d.]+)kbits/s", line)
                 if bitrate_match:
                     bitrate_mbps = float(bitrate_match.group(1)) / 1000
@@ -770,6 +883,8 @@ class YouTubeDownloaderApp:
             if reader.is_alive() and process.stdout is not None:
                 process.stdout.close()
                 reader.join(timeout=FFMPEG_CANCEL_GRACE_SECONDS)
+            elif process.stdout is not None:
+                process.stdout.close()
             self.active_process = None
 
         return_code = process.wait()
@@ -856,6 +971,7 @@ class YouTubeDownloaderApp:
         source_title = metadata.get("title") or "YouTube Video"
         safe_name = sanitize_filename(source_title)
         staged_path: Optional[str] = None
+        self._last_output_warning = False
         try:
             staged_path = self._create_staging_output(destination)
             duration = metadata.get("duration") or 0
@@ -963,7 +1079,8 @@ class YouTubeDownloaderApp:
             if not staged_path or not os.path.isfile(staged_path) or os.path.getsize(staged_path) <= 0:
                 raise RuntimeError("FFmpeg did not produce a non-empty output file.")
             final_size = os.path.getsize(staged_path)
-            if final_size > MAX_FILE_BYTES:
+            self._last_output_warning = final_size > MAX_FILE_BYTES
+            if self._last_output_warning:
                 self._append_log(
                     f"Warning: Final file is {human_readable_size(final_size)}, which exceeds Unifi's 5 GB limit."
                 )

@@ -5,7 +5,7 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import app
 
@@ -40,6 +40,8 @@ class FakeYoutubeDL:
     downloads = []
     download_failures = []
     metadata_failures = []
+    metadata_type = None
+    metadata_error = "Unable to extract metadata"
     download_error_status = 403
 
     def __init__(self, options):
@@ -54,8 +56,13 @@ class FakeYoutubeDL:
     def extract_info(self, url, download=False):
         type(self).extracts += 1
         if type(self).extracts in getattr(type(self), "metadata_failures", []):
-            raise FakeYtdlpError("Unable to extract metadata")
-        return {"title": "Example", "duration": 1, "formats": FORMATS}
+            raise FakeYtdlpError(type(self).metadata_error)
+        return {
+            "title": "Example",
+            "duration": 1,
+            "formats": FORMATS,
+            **({"_type": type(self).metadata_type} if type(self).metadata_type else {}),
+        }
 
     def download(self, urls):
         label = "video" if self.options["format"] == "video-old" else "audio"
@@ -93,6 +100,8 @@ class PipelineTestCase(unittest.TestCase):
         FakeYoutubeDL.downloads = []
         FakeYoutubeDL.download_failures = []
         FakeYoutubeDL.metadata_failures = []
+        FakeYoutubeDL.metadata_type = None
+        FakeYoutubeDL.metadata_error = "Unable to extract metadata"
         FakeYoutubeDL.download_error_status = 403
         self.original_yt_dlp = app.yt_dlp
         app.yt_dlp = SimpleNamespace(YoutubeDL=FakeYoutubeDL)
@@ -110,6 +119,9 @@ class PipelineTestCase(unittest.TestCase):
         self.assertTrue(os.path.isfile(result[0]))
         self.assertTrue(os.path.isfile(result[1]))
         self.downloader._wait_before_retry.assert_called_once_with(5)
+        transition_statuses = [item.args[0] for item in self.downloader._set_status.call_args_list]
+        self.assertTrue(any("best-effort" in status for status in transition_statuses))
+        self.assertTrue(any("cannot bypass" in status for status in transition_statuses))
 
     def test_403_exhaustion_is_bounded_and_cleans_streams(self):
         FakeYoutubeDL.download_failures = [1, 2]
@@ -121,6 +133,12 @@ class PipelineTestCase(unittest.TestCase):
         self.assertEqual(os.listdir(self.worker_temp.name), [])
         self.assertIn("HTTP 403", raised.exception.user_message)
 
+    def test_403_copy_is_best_effort_and_restriction_aware(self):
+        error = app.StreamDownloadError("video", "HTTP Error 403", status_code=403)
+        self.assertIn("best-effort", error.user_message)
+        self.assertIn("access", error.user_message.lower())
+        self.assertIn("does not bypass", error.user_message)
+
     def test_rate_limit_is_not_retried(self):
         FakeYoutubeDL.download_failures = [1]
         FakeYoutubeDL.download_error_status = 429
@@ -130,6 +148,113 @@ class PipelineTestCase(unittest.TestCase):
         self.assertFalse(raised.exception.retryable)
         self.assertEqual(FakeYoutubeDL.extracts, 1)
         self.assertEqual(self.downloader._wait_before_retry.call_count, 0)
+        self.assertIn("rate-limited", raised.exception.user_message)
+        self.assertIn("will not retry", raised.exception.user_message)
+
+    def test_playlist_metadata_is_rejected_for_single_video_contract(self):
+        FakeYoutubeDL.metadata_type = "playlist"
+        with self.assertRaises(app.PipelineError) as raised:
+            self.downloader._resolve_media("https://example.test/playlist")
+        self.assertEqual(raised.exception.stage, "metadata")
+        self.assertIn("Playlist URLs are not supported", raised.exception.user_message)
+        self.assertIn("single-video", raised.exception.user_message)
+
+    def test_metadata_403_copy_is_access_specific(self):
+        FakeYoutubeDL.metadata_failures = [1]
+        FakeYoutubeDL.metadata_error = "ERROR: HTTP Error 403: Forbidden"
+        with self.assertRaises(app.PipelineError) as raised:
+            self.downloader._resolve_media("https://example.test/video")
+        self.assertIn("HTTP 403", raised.exception.user_message)
+        self.assertIn("access", raised.exception.user_message.lower())
+        self.assertIn("does not bypass", raised.exception.user_message)
+
+    def test_completion_status_marks_oversized_output_as_warning(self):
+        message, color = app.completion_status("/tmp/large.mp4", oversized=True)
+        self.assertIn("Completed with warning", message)
+        self.assertIn("5 GB", message)
+        self.assertIn("not Unifi-compliant", message)
+        self.assertEqual(color, "#ffbf00")
+
+    def test_oversized_staged_output_sets_completion_warning_state(self):
+        self.downloader._execute_ffmpeg = Mock(side_effect=self._fake_ffmpeg)
+        with patch.object(app, "MAX_FILE_BYTES", 1):
+            output = self.downloader._transcode_and_mux(
+                "video.webm",
+                "audio.webm",
+                {"title": "Large", "duration": 1},
+                self.temp.name,
+                {"vcodec": "vp9", "acodec": "none", "fps": 30},
+                {"vcodec": "none", "acodec": "opus", "abr": 128},
+            )
+        self.assertTrue(os.path.isfile(output))
+        self.assertTrue(self.downloader._last_output_warning)
+
+    def test_pipeline_failure_exposes_try_again_action(self):
+        self.downloader.root = SimpleNamespace(after=lambda _delay, callback: callback())
+        self.downloader._reset_controls = Mock()
+        self.downloader._download_media = Mock(
+            side_effect=app.PipelineError("metadata", "bad URL", "fixture")
+        )
+        with patch.object(app.tempfile, "mkdtemp", return_value=self.worker_temp.name):
+            self.downloader._run_pipeline("https://example.test/video", self.temp.name)
+        self.downloader._reset_controls.assert_called_once_with(retry=True)
+        self.assertIn("Error: bad URL", self.downloader._set_status.call_args_list[-1].args[0])
+
+    def test_cleanup_warning_preserves_completed_output_status(self):
+        self.downloader.root = SimpleNamespace(after=lambda _delay, callback: callback())
+        self.downloader._reset_controls = Mock()
+        self.downloader._download_media = Mock(return_value=("video", "audio", {}, {}, {}))
+        self.downloader._transcode_and_mux = Mock(return_value=os.path.join(self.temp.name, "Completed.mp4"))
+        self.downloader._last_output_warning = False
+        with patch.object(app.tempfile, "mkdtemp", return_value=self.worker_temp.name), patch.object(
+            app.shutil, "rmtree", side_effect=OSError("busy")
+        ):
+            self.downloader._run_pipeline("https://example.test/video", self.temp.name)
+        final_status = self.downloader._set_status.call_args_list[-1].args
+        self.assertIn("Completed: Completed.mp4", final_status[0])
+        self.assertIn("temporary files could not be removed", final_status[0])
+        self.assertNotIn("Download stopped", final_status[0])
+        self.assertEqual(final_status[1], "#ffbf00")
+
+    def test_retry_controls_are_explicit_and_focus_start_action(self):
+        self.downloader.download_button = Mock()
+        self.downloader.cancel_button = Mock()
+        self.downloader._reset_controls(retry=True)
+        self.assertIn(
+            "Try Again",
+            {
+                item.kwargs.get("text")
+                for item in self.downloader.download_button.configure.call_args_list
+            },
+        )
+        self.downloader.download_button.focus_set.assert_called_once_with()
+
+    def test_unknown_duration_progress_is_indeterminate_not_line_count(self):
+        command = [sys.executable, "-c", "print('frame=1 time=00:00:01.00', flush=True)"]
+        self.downloader._execute_ffmpeg(command, "Transcoding", None, 20, 98)
+        progress_values = [item.args[0] for item in self.downloader._set_progress.call_args_list]
+        self.assertIn(None, progress_values)
+        self.assertNotIn(21, progress_values)
+
+    def test_cancellation_after_finalization_keeps_truthful_output_state(self):
+        self.downloader.root = SimpleNamespace(after=lambda _delay, callback: callback())
+        self.downloader._reset_controls = Mock()
+        output_path = os.path.join(self.temp.name, "Completed.mp4")
+        with open(output_path, "wb") as output:
+            output.write(b"completed")
+        self.downloader._download_media = Mock(return_value=("video", "audio", {}, {}, {}))
+
+        def finalize_then_cancel(*_args):
+            self.downloader.cancel_requested = True
+            return output_path
+
+        self.downloader._transcode_and_mux = Mock(side_effect=finalize_then_cancel)
+        with patch.object(app.tempfile, "mkdtemp", return_value=self.worker_temp.name):
+            self.downloader._run_pipeline("https://example.test/video", self.temp.name)
+        final_status = self.downloader._set_status.call_args_list[-1].args[0]
+        self.assertIn("Completed", final_status)
+        self.assertIn("output preserved", final_status)
+        self.assertNotIn("No completed file was saved", final_status)
 
     def test_metadata_failure_is_not_retried_as_stream_failure(self):
         FakeYoutubeDL.metadata_failures = [1]
