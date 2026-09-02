@@ -28,7 +28,7 @@ identify docs/assets/pipeline/downloader-pipeline.svg /tmp/pipeline-asset-check/
 
 Expected render metadata from ImageMagick 6.9.11-60 on the build host:
 
-- SVG: 1200x560, 10,573 bytes at creation/inspection time.
-- PNG inspection render: 1200x560, 183,082 bytes at the verified render.
+- SVG: 1200x560, 10,553 bytes at creation/inspection time.
+- PNG inspection render: 1200x560, 182,527 bytes at the verified render.
 
 The PNG is an inspection artifact only and is not committed; regenerate it when reviewing the SVG.
