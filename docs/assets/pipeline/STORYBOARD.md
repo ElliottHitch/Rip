@@ -10,7 +10,7 @@
 - 03 Bounded retry / re-resolve: the recovery gate highlights one fresh metadata/format refresh with a 5-second cancellation-aware backoff. HTTP 429 is explicitly not auto-retried.
 - 04 Download streams: video and audio are downloaded separately; partial stream files are cleaned up on failure or cancellation.
 - 05 Remux or transcode: streams are packaged as H.264/AAC MP4 at the supported 24/25/30 FPS target, using CPU x264 when the NVENC path is unavailable or fails.
-- 06 Publish atomically: FFmpeg writes to a destination-filesystem staging path, then the app publishes without overwriting an existing filename and verifies a non-empty MP4.
+- 06 Publish without overwrite: the publisher copies the owned source to a private temporary file in the selected destination, verifies its positive exact length, commits with a same-directory non-overwriting rename, and re-verifies the final MP4. Existing destinations produce a safe conflict; no suffix or hard-link/whole-operation atomicity claim is made.
 - HTTP 403 branch: one fresh stream-detail resolution is attempted as best-effort recovery. The diagram explicitly says this does not bypass access, login, age, region, policy, PO-token, or rate restrictions.
 - Retry exhausted branch: failure remains visible and exposes Try Again rather than claiming success. The branch notes that 403 causes are service-dependent and should be diagnosed by checking availability and waiting before another request.
 
@@ -28,7 +28,7 @@ identify docs/assets/pipeline/downloader-pipeline.svg /tmp/pipeline-asset-check/
 
 Expected render metadata from ImageMagick 6.9.11-60 on the build host:
 
-- SVG: 1200x560, 10,553 bytes at creation/inspection time.
-- PNG inspection render: 1200x560, 182,527 bytes at the verified render.
+- SVG: 1200x560, 10,693 bytes at creation/inspection time.
+- PNG inspection render: 1200x560, 181,636 bytes at the verified render.
 
 The PNG is an inspection artifact only and is not committed; regenerate it when reviewing the SVG.
