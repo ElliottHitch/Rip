@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "policy": "Tools are not downloaded or discovered by the packaging workflow. A release runtime manifest must provide a verified local executable and matching trusted expectation for every tool.",
+  "tools": {
+    "yt-dlp": {
+      "version": "2026.08.19",
+      "sourceRepository": "https://github.com/yt-dlp/yt-dlp",
+      "distribution": "official standalone executable",
+      "status": "pinned-not-bundled",
+      "targets": {
+        "linux-arm64": {
+          "assetName": "yt-dlp_linux",
+          "expectedSha256": null,
+          "blocker": "No approved yt-dlp Linux ARM64 asset hash is recorded in the application contract. Do not qualify this target until the exact upstream asset and digest are reviewed."
+        },
+        "linux-x64": {
+          "assetName": "yt-dlp_linux",
+          "expectedSha256": "58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a"
+        },
+        "win-x64": {
+          "assetName": "yt-dlp.exe",
+          "expectedSha256": "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a"
+        }
+      }
+    },
+    "deno": {
+      "version": "not-qualified",
+      "sourceRepository": "https://github.com/denoland/deno",
+      "distribution": "external operator-provided executable",
+      "status": "external-unqualified",
+      "targets": {
+        "linux-arm64": { "assetName": "deno", "expectedSha256": null, "blocker": "No approved Deno version, asset digest, license inventory, or clean-install evidence is available for this release." },
+        "linux-x64": { "assetName": "deno", "expectedSha256": null, "blocker": "No approved Deno version, asset digest, license inventory, or clean-install evidence is available for this release." },
+        "win-x64": { "assetName": "deno.exe", "expectedSha256": null, "blocker": "No approved Deno version, asset digest, license inventory, or clean-install evidence is available for this release." }
+      }
+    },
+    "ffmpeg": {
+      "version": "not-qualified",
+      "sourceRepository": "https://ffmpeg.org/",
+      "distribution": "external operator-provided executable",
+      "status": "external-unqualified",
+      "targets": {
+        "linux-arm64": { "assetName": "ffmpeg", "expectedSha256": null, "blocker": "FFmpeg is intentionally not bundled; exact build, configure flags, license mode, and digest are not qualified." },
+        "linux-x64": { "assetName": "ffmpeg", "expectedSha256": null, "blocker": "FFmpeg is intentionally not bundled; exact build, configure flags, license mode, and digest are not qualified." },
+        "win-x64": { "assetName": "ffmpeg.exe", "expectedSha256": null, "blocker": "FFmpeg is intentionally not bundled; exact build, configure flags, license mode, and digest are not qualified." }
+      }
+    },
+    "ffprobe": {
+      "version": "not-qualified",
+      "sourceRepository": "https://ffmpeg.org/",
+      "distribution": "external operator-provided executable",
+      "status": "external-unqualified",
+      "targets": {
+        "linux-arm64": { "assetName": "ffprobe", "expectedSha256": null, "blocker": "FFprobe is intentionally not bundled; exact build, configure flags, license mode, and digest are not qualified." },
+        "linux-x64": { "assetName": "ffprobe", "expectedSha256": null, "blocker": "FFprobe is intentionally not bundled; exact build, configure flags, license mode, and digest are not qualified." },
+        "win-x64": { "assetName": "ffprobe.exe", "expectedSha256": null, "blocker": "FFprobe is intentionally not bundled; exact build, configure flags, license mode, and digest are not qualified." }
+      }
+    }
+  }
+}

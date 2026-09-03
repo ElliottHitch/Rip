@@ -11,7 +11,9 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from dataclasses import dataclass, field
+from pathlib import Path
 from tkinter import ttk, filedialog, messagebox
 from typing import Dict, Optional, Tuple
 
@@ -30,6 +32,55 @@ MAX_DOWNLOAD_ATTEMPTS = 2
 RETRY_BACKOFF_SECONDS = (5,)
 FFMPEG_CANCEL_GRACE_SECONDS = 0.5
 FFMPEG_READER_POLL_SECONDS = 0.1
+SELECT_BROWSER_LABEL = "Select a browser"
+SUPPORTED_BROWSERS = (
+    "Brave",
+    "Chrome",
+    "Chromium",
+    "Edge",
+    "Firefox",
+    "Opera",
+    "Safari",
+    "Vivaldi",
+    "Whale",
+)
+_BROWSER_NAMES = {name.casefold(): name.lower() for name in SUPPORTED_BROWSERS}
+
+BROWSER_SESSION_UNAVAILABLE_MESSAGE = (
+    "Couldn't read the selected browser session. Check that the browser is installed, "
+    "the profile name or path is correct, and the browser is closed, then try again. "
+    "The app did not save or export cookies."
+)
+BROWSER_SESSION_DECRYPTION_MESSAGE = (
+    "The selected browser session could not be decrypted in this environment. Check the "
+    "browser's OS keyring support and the app's Python/yt-dlp dependencies, then try again "
+    "or turn off Use browser session. The app did not save or export cookies."
+)
+BROWSER_SESSION_ACCESS_MESSAGE = (
+    "The selected browser session did not grant access to this video. Confirm that the video "
+    "is available to the signed-in account, refresh the page in the same browser, and try "
+    "again later. The app does not bypass service restrictions."
+)
+BROWSER_SESSION_PLATFORM_MESSAGE = (
+    "Browser sessions aren't available for the selected browser on this operating system. "
+    "Choose another supported browser or turn off Use browser session."
+)
+BROWSER_SESSION_CONSENT_BODY = (
+    "For this download, yt-dlp will read cookies from the selected local browser profile. "
+    "Use only an account and media you are authorized to access. Sign in independently in "
+    "your browser; this app never asks for your YouTube password, exports or saves cookies, "
+    "uploads browser data, or bypasses login, age, region, policy, PO-token, rate, or other "
+    "service restrictions. For safety, prefer a dedicated browser profile. Close the browser "
+    "before starting if it prevents access to its profile data."
+)
+OPEN_BROWSER_MISSING_MESSAGE = (
+    "The completed file is no longer available. Use Open Folder to locate files or download "
+    "the video again."
+)
+OPEN_BROWSER_FAILURE_MESSAGE = (
+    "Couldn't open the completed file in your default browser. Use Open Folder to locate the "
+    "MP4 instead."
+)
 
 
 class DownloadCancelled(Exception):
@@ -74,6 +125,65 @@ class StreamDownloadError(PipelineError):
         )
         self.label = label
         self.status_code = status_code
+
+
+class BrowserSessionError(PipelineError):
+    """A browser-session setup failure with deliberately generic diagnostics."""
+
+    def __init__(self, stage: str, user_message: str):
+        # Never retain yt-dlp's browser/cookie diagnostics in the exception detail. The
+        # detail is also written to the Activity Log by the pipeline error handler.
+        super().__init__(stage, user_message, "Browser session setup failed.")
+
+
+def build_browser_session_options(browser: str, profile: Optional[str] = None) -> Dict:
+    """Build yt-dlp's supported browser-cookie option without touching browser data."""
+    browser_key = (browser or "").strip().casefold()
+    browser_name = _BROWSER_NAMES.get(browser_key)
+    if not browser_name:
+        raise ValueError("Choose a supported browser before starting the download.")
+    if browser_name == "safari" and sys.platform != "darwin":
+        raise ValueError(BROWSER_SESSION_PLATFORM_MESSAGE)
+    # yt-dlp accepts a four-item tuple: browser, profile, keyring, container. An empty
+    # profile intentionally means yt-dlp selects its normal most-recently-accessed profile.
+    selected_profile = profile if profile else None
+    return {"cookiesfrombrowser": (browser_name, selected_profile, None, None)}
+
+
+def is_browser_setup_error(detail: str) -> bool:
+    """Identify local browser/profile/keyring failures without parsing cookie values."""
+    lowered = detail.casefold()
+    return any(
+        marker in lowered
+        for marker in (
+            "browser",
+            "profile",
+            "cookie",
+            "keyring",
+            "decrypt",
+            "cookiesfrombrowser",
+            "database",
+        )
+    )
+
+
+def is_verified_mp4(path: str) -> bool:
+    """Check the exact published output before exposing it to the browser action."""
+    try:
+        return (
+            bool(path)
+            and Path(path).suffix.casefold() == ".mp4"
+            and os.path.isfile(path)
+            and os.path.getsize(path) > 0
+            and os.access(path, os.R_OK)
+        )
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def local_file_uri(path: str) -> str:
+    """Return a properly encoded URI for a local file, never a source URL."""
+    return Path(path).expanduser().resolve().as_uri()
 
 
 def metadata_error_message(status_code: Optional[int]) -> str:
@@ -324,6 +434,16 @@ class YouTubeDownloaderApp:
         self.status_var = tk.StringVar(value="Ready.")
         self.progress_var = tk.IntVar(value=0)
         self.env_summary_var = tk.StringVar()
+        self.browser_session_var = tk.BooleanVar(value=False)
+        self.browser_var = tk.StringVar(value=SELECT_BROWSER_LABEL)
+        self.profile_var = tk.StringVar()
+        self.browser_session_helper_var = tk.StringVar(
+            value="Off by default. No browser data is read."
+        )
+        self._browser_session_consent = False
+        self._browser_session_locked = False
+        self._active_browser_options: Dict = {}
+        self._completed_output_path: Optional[str] = None
         self._last_output_warning = False
 
         self._build_theme()
@@ -367,24 +487,68 @@ class YouTubeDownloaderApp:
         self.path_entry.grid(row=1, column=1, sticky="ew", pady=5)
         ttk.Button(self.main_frame, text="Browse...", command=self._browse_directory).grid(row=1, column=2, sticky="ew", padx=(10, 0))
 
+        session_frame = ttk.LabelFrame(self.main_frame, text="Browser Session (optional)", padding=8)
+        session_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(5, 0))
+        session_frame.columnconfigure(1, weight=1)
+        self.browser_session_checkbutton = ttk.Checkbutton(
+            session_frame,
+            text="Use browser session for this download",
+            variable=self.browser_session_var,
+            command=self._toggle_browser_session,
+        )
+        self.browser_session_checkbutton.grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(
+            session_frame,
+            textvariable=self.browser_session_helper_var,
+            wraplength=680,
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 5))
+        ttk.Label(session_frame, text="Browser").grid(row=2, column=0, sticky="w", padx=(0, 10))
+        self.browser_combobox = ttk.Combobox(
+            session_frame,
+            textvariable=self.browser_var,
+            values=(SELECT_BROWSER_LABEL,) + SUPPORTED_BROWSERS,
+            state="disabled",
+        )
+        self.browser_combobox.grid(row=2, column=1, sticky="ew", pady=2)
+        self.browser_combobox.bind("<<ComboboxSelected>>", self._browser_selection_changed)
+        ttk.Label(session_frame, text="Profile name or path (optional)").grid(
+            row=3, column=0, sticky="w", padx=(0, 10)
+        )
+        self.profile_entry = ttk.Entry(session_frame, textvariable=self.profile_var, state="disabled")
+        self.profile_entry.grid(row=3, column=1, sticky="ew", pady=2)
+        ttk.Label(
+            session_frame,
+            text="Leave blank to use the most recently accessed profile.",
+            wraplength=680,
+            justify="left",
+        ).grid(row=4, column=1, sticky="w", pady=(0, 2))
+
         button_frame = ttk.Frame(self.main_frame)
-        button_frame.grid(row=2, column=0, columnspan=3, pady=10, sticky="ew")
-        button_frame.columnconfigure((0, 1, 2, 3), weight=1, uniform="btn")
+        button_frame.grid(row=3, column=0, columnspan=3, pady=10, sticky="ew")
+        button_frame.columnconfigure((0, 1, 2, 3, 4), weight=1, uniform="btn")
         self.download_button = ttk.Button(button_frame, text="Start Download", command=self.start_download)
         self.download_button.grid(row=0, column=0, padx=5, sticky="ew")
         self.cancel_button = ttk.Button(button_frame, text="Cancel", command=self.cancel_download, state="disabled")
         self.cancel_button.grid(row=0, column=1, padx=5, sticky="ew")
         ttk.Button(button_frame, text="Test Environment", command=self._handle_test_environment).grid(row=0, column=2, padx=5, sticky="ew")
         ttk.Button(button_frame, text="Open Folder", command=self._open_download_directory).grid(row=0, column=3, padx=5, sticky="ew")
+        self.open_browser_button = ttk.Button(
+            button_frame,
+            text="Open in Browser",
+            command=self._open_completed_in_browser,
+            state="disabled",
+        )
+        self.open_browser_button.grid(row=0, column=4, padx=5, sticky="ew")
 
         ttk.Label(self.main_frame, textvariable=self.stage_var, foreground=self.accent_color).grid(
-            row=3, column=0, columnspan=3, sticky="w", pady=(10, 0)
+            row=4, column=0, columnspan=3, sticky="w", pady=(10, 0)
         )
 
         self.progress_bar = ttk.Progressbar(
             self.main_frame, maximum=100, variable=self.progress_var, mode="determinate", style="Green.Horizontal.TProgressbar"
         )
-        self.progress_bar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=8)
+        self.progress_bar.grid(row=5, column=0, columnspan=3, sticky="ew", pady=8)
 
         self.status_label = ttk.Label(
             self.main_frame,
@@ -394,16 +558,16 @@ class YouTubeDownloaderApp:
             justify="left",
             anchor="w",
         )
-        self.status_label.grid(row=5, column=0, columnspan=3, sticky="w")
+        self.status_label.grid(row=6, column=0, columnspan=3, sticky="w")
 
         env_frame = ttk.LabelFrame(self.main_frame, text="Environment", padding=10)
-        env_frame.grid(row=6, column=0, columnspan=3, sticky="ew", pady=10)
+        env_frame.grid(row=7, column=0, columnspan=3, sticky="ew", pady=10)
         self.env_label = ttk.Label(env_frame, textvariable=self.env_summary_var, justify="left")
         self.env_label.pack(fill="x")
 
         log_frame = ttk.LabelFrame(self.main_frame, text="Activity Log", padding=10)
-        log_frame.grid(row=7, column=0, columnspan=3, sticky="nsew")
-        self.main_frame.rowconfigure(7, weight=1)
+        log_frame.grid(row=8, column=0, columnspan=3, sticky="nsew")
+        self.main_frame.rowconfigure(8, weight=1)
         self.log_widget = tk.Text(
             log_frame,
             height=12,
@@ -415,12 +579,165 @@ class YouTubeDownloaderApp:
         )
         self.log_widget.pack(fill="both", expand=True)
         self.log_widget.configure(state="disabled")
+        self._update_browser_controls()
 
     # ------------------------------------------------------------------ UI helpers
     def _browse_directory(self):
         path = filedialog.askdirectory(initialdir=self.path_var.get() or os.path.expanduser("~"))
         if path:
             self.path_var.set(path)
+
+    def _show_browser_session_consent(self) -> bool:
+        """Show the safe-default disclosure before enabling browser-session access."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Use browser session?")
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        result = [False]
+
+        content = ttk.Frame(dialog, padding=16)
+        content.pack(fill="both", expand=True)
+        ttk.Label(content, text=BROWSER_SESSION_CONSENT_BODY, wraplength=580, justify="left").pack(fill="x")
+        button_frame = ttk.Frame(content)
+        button_frame.pack(fill="x", pady=(16, 0))
+
+        def keep_off():
+            result[0] = False
+            dialog.destroy()
+
+        def continue_with_session():
+            result[0] = True
+            dialog.destroy()
+
+        keep_off_button = ttk.Button(
+            button_frame, text="Keep Browser Session Off", command=keep_off
+        )
+        keep_off_button.pack(side="left")
+        ttk.Button(
+            button_frame,
+            text="Continue with Browser Session",
+            command=continue_with_session,
+        ).pack(side="right")
+        dialog.protocol("WM_DELETE_WINDOW", keep_off)
+        dialog.bind("<Escape>", lambda _event: keep_off())
+        keep_off_button.focus_set()
+        dialog.grab_set()
+        self.root.wait_window(dialog)
+        return result[0]
+
+    def _toggle_browser_session(self):
+        if self._browser_session_locked:
+            return
+        if self.browser_session_var.get():
+            if not self._browser_session_consent:
+                if self._show_browser_session_consent():
+                    self._browser_session_consent = True
+                else:
+                    self.browser_session_var.set(False)
+                    self.browser_session_helper_var.set("Off by default. No browser data is read.")
+                    self._set_status("Browser session remains off. No browser data was read.")
+        else:
+            self._browser_session_consent = False
+        self._update_browser_controls()
+
+    def _browser_selection_changed(self, _event=None):
+        self._update_download_button_state()
+
+    def _update_download_button_state(self):
+        if not hasattr(self, "download_button"):
+            return
+        worker = getattr(self, "worker_thread", None)
+        if worker is not None and worker.is_alive():
+            return
+        session_on = bool(self.browser_session_var.get())
+        browser_selected = self.browser_var.get() not in ("", SELECT_BROWSER_LABEL)
+        state = "disabled" if session_on and not browser_selected else "normal"
+        self.download_button.configure(state=state)
+
+    def _update_browser_controls(self):
+        if not hasattr(self, "browser_combobox"):
+            return
+        session_on = bool(self.browser_session_var.get())
+        enabled = session_on and self._browser_session_consent and not self._browser_session_locked
+        self.browser_combobox.configure(state="readonly" if enabled else "disabled")
+        self.profile_entry.configure(state="normal" if enabled else "disabled")
+        if self._browser_session_locked:
+            self.browser_session_helper_var.set(
+                "Using the selected browser session for this download."
+            )
+        elif session_on and self._browser_session_consent:
+            self.browser_session_helper_var.set(
+                "On for this download only. The app reads the selected local browser session "
+                "through yt-dlp; it does not save or upload browser data."
+            )
+        elif session_on:
+            self.browser_session_helper_var.set(
+                "Choose a browser. This permission applies to this download only."
+            )
+        else:
+            self.browser_session_helper_var.set("Off by default. No browser data is read.")
+        self.browser_session_checkbutton.configure(
+            state="disabled" if self._browser_session_locked else "normal"
+        )
+        self._update_download_button_state()
+
+    def _browser_options_for_run(self) -> Dict:
+        if not self.browser_session_var.get():
+            return {}
+        if not self._browser_session_consent:
+            raise ValueError("Confirm browser-session access before starting the download.")
+        profile = self.profile_var.get()
+        return build_browser_session_options(self.browser_var.get(), profile)
+
+    def _lock_browser_session_controls(self):
+        self._browser_session_locked = True
+        self._update_browser_controls()
+
+    def _reset_browser_session_controls(self):
+        """Clear per-run session consent and all in-memory browser selections."""
+        self._browser_session_consent = False
+        self._browser_session_locked = False
+        if hasattr(self, "browser_session_var"):
+            self.browser_session_var.set(False)
+            self.browser_var.set(SELECT_BROWSER_LABEL)
+            self.profile_var.set("")
+            self._update_browser_controls()
+        self._active_browser_options = {}
+
+    def _clear_completed_output(self):
+        self._completed_output_path = None
+        if hasattr(self, "open_browser_button"):
+            self.open_browser_button.configure(state="disabled")
+
+    def _set_completed_output(self, output_path: str):
+        """Enable Open in Browser only after re-reading the published file."""
+        def publish_if_verified():
+            if is_verified_mp4(output_path):
+                self._completed_output_path = output_path
+                if hasattr(self, "open_browser_button"):
+                    self.open_browser_button.configure(state="normal")
+            else:
+                self._clear_completed_output()
+
+        self.root.after(0, publish_if_verified)
+
+    def _open_completed_in_browser(self):
+        output_path = self._completed_output_path
+        if not output_path or not is_verified_mp4(output_path):
+            self._clear_completed_output()
+            self._set_status(f"Error: {OPEN_BROWSER_MISSING_MESSAGE}", "#ff6b6b")
+            messagebox.showerror("Open in Browser", OPEN_BROWSER_MISSING_MESSAGE)
+            return
+        try:
+            uri = local_file_uri(output_path)
+            if not webbrowser.open(uri):
+                raise OSError("default browser did not accept the file URI")
+        except Exception:
+            self._set_status(f"Error: {OPEN_BROWSER_FAILURE_MESSAGE}", "#ff6b6b")
+            messagebox.showerror("Open in Browser", OPEN_BROWSER_FAILURE_MESSAGE)
+            return
+        filename = os.path.basename(output_path)
+        self._set_status(f"Opened {filename} in your default browser.", "#4dcc7d")
 
     def _set_stage(self, text: str):
         self.root.after(0, lambda: self.stage_var.set(text))
@@ -551,9 +868,25 @@ class YouTubeDownloaderApp:
             self._append_log(f"Input path error: {safe_error_detail(exc)}")
             return
 
+        try:
+            browser_options = self._browser_options_for_run()
+        except ValueError as exc:
+            self._set_status(f"Error: {str(exc)}", "#ff6b6b")
+            if self.browser_session_var.get() and hasattr(self, "browser_combobox"):
+                self.browser_combobox.focus_set()
+            return
+
+        self._clear_completed_output()
+        self._active_browser_options = dict(browser_options)
+        self._lock_browser_session_controls()
         self.cancel_requested = False
         self._last_output_warning = False
-        self._set_status("Preparing download...", self.accent_color)
+        self._set_status(
+            "Using the selected browser session for this download."
+            if browser_options
+            else "Preparing download...",
+            self.accent_color,
+        )
         self._set_stage("Initializing (phase 1 of 4)")
         self._set_progress(None)
         self.download_button.configure(text="Start Download", state="disabled")
@@ -580,6 +913,7 @@ class YouTubeDownloaderApp:
         final_status: Optional[str] = None
         final_color = "#ff6b6b"
         retry = False
+        published_output = False
         try:
             video_path, audio_path, metadata, video_fmt, audio_fmt = self._download_media(url, temp_dir)
             if self.cancel_requested:
@@ -587,6 +921,14 @@ class YouTubeDownloaderApp:
             output_path = self._transcode_and_mux(
                 video_path, audio_path, metadata, destination, video_fmt, audio_fmt
             )
+            if not is_verified_mp4(output_path):
+                raise PipelineError(
+                    "publication",
+                    "Couldn't verify the completed MP4. Try the download again.",
+                    "Final output verification failed.",
+                )
+            published_output = True
+            self._set_completed_output(output_path)
             final_status, final_color = completion_status(
                 output_path, oversized=getattr(self, "_last_output_warning", False)
             )
@@ -607,6 +949,13 @@ class YouTubeDownloaderApp:
             final_color = "#ff6b6b"
             self._set_status(final_status, final_color)
             self._append_log(f"Failed during {exc.stage}: {exc.detail}")
+            if isinstance(exc, BrowserSessionError):
+                self.root.after(
+                    0,
+                    lambda message=exc.user_message: messagebox.showerror(
+                        "Browser session unavailable", message
+                    ),
+                )
         except Exception as exc:
             retry = True
             detail = safe_error_detail(exc)
@@ -628,7 +977,10 @@ class YouTubeDownloaderApp:
                         final_status,
                         "#ffbf00" if final_color == "#4dcc7d" else final_color,
                     )
+            if not published_output:
+                self.root.after(0, self._clear_completed_output)
             self.root.after(0, lambda: self._reset_controls(retry=retry))
+            self.root.after(0, self._reset_browser_session_controls)
 
     def _check_cancelled(self):
         if self.cancel_requested:
@@ -661,6 +1013,7 @@ class YouTubeDownloaderApp:
         self._set_stage("Fetching metadata (phase 2 of 4)")
         self._append_log("Fetching video information...")
         if yt_dlp is None:
+            self._active_browser_options = {}
             raise PipelineError(
                 "metadata",
                 "yt-dlp is required. Install the requirements, then try again.",
@@ -671,6 +1024,9 @@ class YouTubeDownloaderApp:
             "skip_download": True,
             "noplaylist": False,
         }
+        ydl_opts.update(getattr(self, "_active_browser_options", {}))
+        converted_error: Optional[PipelineError] = None
+        ydl = None
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 metadata = ydl.extract_info(url, download=False)
@@ -682,17 +1038,61 @@ class YouTubeDownloaderApp:
                 )
             best_video, best_audio = pick_best_formats(metadata)
         except DownloadCancelled:
+            self._active_browser_options = {}
             raise
         except PipelineError:
+            self._active_browser_options = {}
             raise
         except Exception as exc:
-            detail = safe_error_detail(exc)
             status_code = ytdlp_status_code(exc)
-            raise PipelineError(
-                "metadata",
-                metadata_error_message(status_code),
-                detail,
-            ) from exc
+            raw_detail = str(exc)
+            if getattr(self, "_active_browser_options", {}):
+                if status_code == 403:
+                    converted_error = PipelineError(
+                        "metadata",
+                        BROWSER_SESSION_ACCESS_MESSAGE,
+                        "Browser session did not grant metadata access.",
+                    )
+                elif is_browser_setup_error(raw_detail):
+                    user_message = (
+                        BROWSER_SESSION_DECRYPTION_MESSAGE
+                        if any(
+                            marker in raw_detail.casefold()
+                            for marker in ("decrypt", "keyring")
+                        )
+                        else BROWSER_SESSION_UNAVAILABLE_MESSAGE
+                    )
+                    converted_error = BrowserSessionError("metadata", user_message)
+                else:
+                    # Keep ordinary network/access classification, but do not put the
+                    # browser/session diagnostic in the activity log.
+                    detail = "Metadata request failed while using the selected browser session."
+                    converted_error = PipelineError(
+                        "metadata",
+                        metadata_error_message(status_code),
+                        detail,
+                    )
+            else:
+                converted_error = PipelineError(
+                    "metadata",
+                    metadata_error_message(status_code),
+                    safe_error_detail(exc),
+                )
+            # Do not leave the unsanitized extractor message in the traceback
+            # frame's locals when the deferred error is raised below.
+            raw_detail = ""
+        finally:
+            # The deferred sanitized raise below keeps this frame in the traceback.
+            # Release every yt-dlp option-bearing value before that can happen.
+            ydl = None
+            ydl_opts.clear()
+        if converted_error is not None:
+            if not converted_error.retryable:
+                # No caller retry needs the browser session for terminal metadata/setup
+                # errors. Clearing the shared state also keeps it out of nested frame
+                # locals when a traceback inspector follows ``self``.
+                self._active_browser_options = {}
+            raise converted_error
         self._append_log(
             f"Selected video {best_video.get('format_id')} ({best_video.get('height')}p) "
             f"and audio {best_audio.get('format_id')} ({best_audio.get('abr') or best_audio.get('tbr')} kbps)."
@@ -718,11 +1118,17 @@ class YouTubeDownloaderApp:
                 audio_path = self._download_stream(url, best_audio["format_id"], temp_dir, "audio")
                 return video_path, audio_path, metadata, best_video, best_audio
             except DownloadCancelled:
+                self._active_browser_options = {}
                 raise
             except PipelineError as exc:
                 last_error = exc
                 self._cleanup_temp_files(temp_dir)
                 if not exc.retryable or attempt >= MAX_DOWNLOAD_ATTEMPTS:
+                    # A retryable stream error keeps the explicit browser options until
+                    # the next attempt. Once no attempt remains, release them before
+                    # re-raising so traceback inspection cannot reach selected state via
+                    # this frame's ``self`` local.
+                    self._active_browser_options = {}
                     raise
                 self._append_log(
                     f"{exc.stage.capitalize()} failed; refreshing stream details "
@@ -777,6 +1183,13 @@ class YouTubeDownloaderApp:
                 downloaded["path"] = d.get("filename")
                 self._append_log(f"{label.capitalize()} download finished: {downloaded['path']}")
 
+        if yt_dlp is None:
+            self._active_browser_options = {}
+            raise PipelineError(
+                f"{label} download",
+                "yt-dlp is required. Install the requirements, then try again.",
+                safe_error_detail(YT_DLP_IMPORT_ERROR or ImportError("yt-dlp is unavailable")),
+            )
         ydl_opts = {
             "quiet": True,
             "noplaylist": True,
@@ -788,20 +1201,54 @@ class YouTubeDownloaderApp:
             "fragment_retries": 1,
             "socket_timeout": 30,
         }
-        if yt_dlp is None:
-            raise PipelineError(
-                f"{label} download",
-                "yt-dlp is required. Install the requirements, then try again.",
-                safe_error_detail(YT_DLP_IMPORT_ERROR or ImportError("yt-dlp is unavailable")),
-            )
+        ydl_opts.update(getattr(self, "_active_browser_options", {}))
+        converted_error: Optional[PipelineError] = None
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
         except DownloadCancelled:
+            self._active_browser_options = {}
             raise
         except Exception as exc:
             status_code = ytdlp_status_code(exc)
-            raise StreamDownloadError(label, safe_error_detail(exc), status_code=status_code) from exc
+            raw_detail = str(exc)
+            if getattr(self, "_active_browser_options", {}):
+                if status_code == 403:
+                    error = StreamDownloadError(
+                        label,
+                        "Browser session did not grant stream access.",
+                        status_code=status_code,
+                    )
+                    error.user_message = BROWSER_SESSION_ACCESS_MESSAGE
+                    converted_error = error
+                elif is_browser_setup_error(raw_detail):
+                    user_message = (
+                        BROWSER_SESSION_DECRYPTION_MESSAGE
+                        if any(
+                            marker in raw_detail.casefold()
+                            for marker in ("decrypt", "keyring")
+                        )
+                        else BROWSER_SESSION_UNAVAILABLE_MESSAGE
+                    )
+                    converted_error = BrowserSessionError(f"{label} download", user_message)
+                else:
+                    detail = f"{label.capitalize()} request failed while using the selected browser session."
+                    converted_error = StreamDownloadError(label, detail, status_code=status_code)
+            else:
+                converted_error = StreamDownloadError(
+                    label, safe_error_detail(exc), status_code=status_code
+                )
+            # Do not leave the unsanitized extractor message in the traceback
+            # frame's locals when the deferred error is raised below.
+            raw_detail = ""
+        finally:
+            # Keep the option-bearing locals empty before any converted error is raised.
+            ydl = None
+            ydl_opts.clear()
+        if converted_error is not None:
+            if not converted_error.retryable:
+                self._active_browser_options = {}
+            raise converted_error
 
         file_path = downloaded["path"]
         if not file_path or not os.path.isfile(file_path):

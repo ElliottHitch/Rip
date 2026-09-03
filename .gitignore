@@ -11,6 +11,10 @@ env/
 ENV/
 .venv
 
+# .NET build output
+**/bin/
+**/obj/
+
 # IDE
 .vscode/
 .idea/
@@ -26,3 +30,5 @@ Thumbs.db
 *.webm
 *.mkv
 
+# Generated packaging evidence
+artifacts/
