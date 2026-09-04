@@ -61,6 +61,7 @@ class FakeYoutubeDL:
     extracts = 0
     options_history = []
     downloads = []
+    formats = FORMATS
     download_failures = []
     metadata_failures = []
     metadata_type = None
@@ -85,12 +86,13 @@ class FakeYoutubeDL:
         return {
             "title": "Example",
             "duration": 1,
-            "formats": FORMATS,
+            "formats": type(self).formats,
             **({"_type": type(self).metadata_type} if type(self).metadata_type else {}),
         }
 
     def download(self, urls):
-        label = "video" if self.options["format"] == "video-old" else "audio"
+        format_id = self.options["format"]
+        label = "combined" if format_id == "18" else ("video" if format_id == "video-old" else "audio")
         type(self).downloads.append(label)
         path = self.options["outtmpl"].replace("%(ext)s", "mp4")
         with open(path, "wb") as output:
@@ -125,6 +127,7 @@ class PipelineTestCase(unittest.TestCase):
         FakeYoutubeDL.extracts = 0
         FakeYoutubeDL.options_history = []
         FakeYoutubeDL.downloads = []
+        FakeYoutubeDL.formats = FORMATS
         FakeYoutubeDL.download_failures = []
         FakeYoutubeDL.metadata_failures = []
         FakeYoutubeDL.metadata_type = None
@@ -182,6 +185,52 @@ class PipelineTestCase(unittest.TestCase):
         self.downloader._download_media("https://example.test/video", self.worker_temp.name)
         self.assertTrue(FakeYoutubeDL.options_history)
         self.assertTrue(all("cookiesfrombrowser" not in options for options in FakeYoutubeDL.options_history))
+
+    def test_progressive_fallback_selects_and_downloads_one_combined_format(self):
+        FakeYoutubeDL.formats = [
+            {
+                "format_id": "18",
+                "vcodec": "avc1",
+                "acodec": "mp4a.40.2",
+                "height": 720,
+                "fps": 30,
+                "tbr": 1800,
+            }
+        ]
+
+        result = self.downloader._download_media("https://example.test/video", self.worker_temp.name)
+
+        self.assertEqual(FakeYoutubeDL.downloads, ["combined"])
+        self.assertEqual(result[0], result[1])
+        self.assertEqual(FakeYoutubeDL.options_history[-1]["format"], "18")
+        self.assertEqual(FakeYoutubeDL.options_history[-1]["max_filesize"], app.MAX_FILE_BYTES)
+        self.assertTrue(any("muxed video and audio" in call.args[0] for call in self.downloader._append_log.call_args_list))
+
+    def test_environment_probe_reports_ejs_and_deno_readiness_without_network(self):
+        with patch.object(app.importlib.util, "find_spec", return_value=object()), patch.object(
+            app.shutil,
+            "which",
+            side_effect=lambda name: {"deno": "/tools/deno", "ffmpeg": "/tools/ffmpeg", "ffprobe": "/tools/ffprobe"}.get(name),
+        ), patch.object(app.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="deno 2.3.1\n", stderr="")):
+            status = app.probe_environment()
+        self.assertTrue(status.ejs_available)
+        self.assertEqual(status.deno_path, "/tools/deno")
+        self.assertEqual(status.deno_version, "2.3.1")
+        self.assertTrue(status.deno_ready)
+        self.assertEqual(status.issues, [])
+
+        with patch.object(app.importlib.util, "find_spec", return_value=None), patch.object(
+            app.shutil, "which", side_effect=lambda name: "/tools/deno" if name == "deno" else None
+        ), patch.object(
+            app.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="deno 2.2.0\n", stderr="")
+        ):
+            missing = app.probe_environment()
+        self.assertFalse(missing.ejs_available)
+        self.assertEqual(missing.deno_path, "/tools/deno")
+        self.assertEqual(missing.deno_version, "2.2.0")
+        self.assertFalse(missing.deno_ready)
+        self.assertTrue(any("EJS" in issue for issue in missing.issues))
+        self.assertTrue(any("Deno" in issue for issue in missing.issues))
 
     def test_opt_in_browser_option_is_propagated_to_metadata_and_both_streams(self):
         self.downloader._active_browser_options = app.build_browser_session_options(
@@ -551,6 +600,7 @@ class PipelineTestCase(unittest.TestCase):
             self.downloader._run_pipeline("https://example.test/video", self.temp.name)
         self.downloader._reset_controls.assert_called_once_with(retry=True)
         self.assertIn("Error: bad URL", self.downloader._set_status.call_args_list[-1].args[0])
+        self.assertIn("Failed", [call.args[0] for call in getattr(self.downloader._set_stage, "call_args_list", [])])
 
     def test_cleanup_warning_preserves_completed_output_status(self):
         self.downloader.root = SimpleNamespace(after=lambda _delay, callback: callback())
@@ -642,7 +692,7 @@ class PipelineTestCase(unittest.TestCase):
 
     def test_output_is_staged_then_published_safely(self):
         self.downloader._execute_ffmpeg = Mock(side_effect=self._fake_ffmpeg)
-        existing = os.path.join(self.temp.name, "Unsafe Title.mp4")
+        existing = os.path.join(self.temp.name, "Unsafe Title.mkv")
         with open(existing, "wb") as output:
             output.write(b"existing")
         output = self.downloader._transcode_and_mux(
@@ -654,8 +704,33 @@ class PipelineTestCase(unittest.TestCase):
             {"vcodec": "none", "acodec": "opus", "abr": 128},
         )
         self.assertEqual(os.path.dirname(output), os.path.abspath(self.temp.name))
-        self.assertEqual(os.path.basename(output), "Unsafe Title (1).mp4")
-        self.assertEqual(sorted(os.listdir(self.temp.name)), ["Unsafe Title (1).mp4", "Unsafe Title.mp4"])
+        self.assertEqual(os.path.basename(output), "Unsafe Title (1).mkv")
+        self.assertEqual(sorted(os.listdir(self.temp.name)), ["Unsafe Title (1).mkv", "Unsafe Title.mkv"])
+
+    def test_unifi_compatibility_frame_rate_is_bounded_without_overriding_allowed_source(self):
+        setattr(self.downloader, "unifi_compatible_var", FakeVar(True))
+        for source_fps in (60, None):
+            with self.subTest(source_fps=source_fps):
+                self.downloader._execute_ffmpeg = Mock(side_effect=self._fake_ffmpeg)
+                self.downloader._transcode_and_mux(
+                    "video.webm",
+                    "audio.webm",
+                    {"title": "FPS", "duration": 1},
+                    self.temp.name,
+                    {"vcodec": "vp9", "acodec": "none", "fps": source_fps},
+                    {"vcodec": "none", "acodec": "opus", "abr": 128},
+                )
+                command = self.downloader._execute_ffmpeg.call_args.args[0]
+                self.assertIn(["-r", "30"], [command[index:index + 2] for index in range(len(command) - 1)])
+
+        self.downloader._execute_ffmpeg = Mock(side_effect=self._fake_ffmpeg)
+        self.downloader._transcode_and_mux(
+            "video.webm", "audio.webm", {"title": "Allowed FPS", "duration": 1}, self.temp.name,
+            {"vcodec": "vp9", "acodec": "none", "fps": 25},
+            {"vcodec": "none", "acodec": "opus", "abr": 128},
+        )
+        command = self.downloader._execute_ffmpeg.call_args.args[0]
+        self.assertNotIn("-r", command)
 
     def test_ffmpeg_failure_leaves_no_partial_output(self):
         def partial_failure(command, stage_label, duration, start_progress, end_progress):

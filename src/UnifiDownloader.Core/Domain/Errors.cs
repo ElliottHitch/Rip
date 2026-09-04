@@ -10,6 +10,7 @@ public enum DownloadErrorCode
     AccessDenied,
     RateLimited,
     MissingTool,
+    TooLarge,
     MediaProcessingFailed,
     PublicationConflict,
     Cancelled,
@@ -87,6 +88,9 @@ public sealed record SafeDownloadError
 
 public static partial class ErrorRedactor
 {
+    [GeneratedRegex(@"\x1B(?:\[[0-?]*[ -/]*[@-~]|\].*?(?:\x07|\x1B\\))", RegexOptions.CultureInvariant)]
+    private static partial Regex Ansi();
+
     [GeneratedRegex(@"https?://[^\s]+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Url();
 
@@ -105,7 +109,9 @@ public static partial class ErrorRedactor
     public static string Redact(string message)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        var safe = Url().Replace(message, "[redacted-url]");
+        var safe = Ansi().Replace(message, string.Empty);
+        safe = new string(safe.Where(static character => !char.IsControl(character) || character is '\n' or '\r' or '\t').ToArray());
+        safe = Url().Replace(safe, "[redacted-url]");
         safe = AuthorizationAssignment().Replace(safe, "[redacted-sensitive-value]");
         safe = SensitiveAssignment().Replace(safe, "[redacted-sensitive-value]");
         safe = WindowsPath().Replace(safe, "[redacted-path]");
@@ -136,6 +142,13 @@ public static class SafeDownloadErrors
         "The download operation failed unexpectedly.",
         RetryAction.None,
         new RedactedDiagnosticToken("diag-application-unexpected"));
+
+    public static SafeDownloadError ProviderRefreshFailed() => SafeDownloadError.Create(
+        DownloadErrorCode.ProviderUnavailable,
+        DownloadStage.Resolving,
+        "The provider could not refresh the media stream.",
+        RetryAction.UserActionRequired,
+        new RedactedDiagnosticToken("diag-application-provider-refresh-failed"));
 
     public static SafeDownloadError InvalidMetadata() => SafeDownloadError.Create(
         DownloadErrorCode.InvalidRequest,
@@ -178,4 +191,11 @@ public static class SafeDownloadErrors
         "Download progress reporting failed.",
         RetryAction.None,
         new RedactedDiagnosticToken("diag-application-observer-failed"));
+
+    public static SafeDownloadError LocalStreamTooLarge() => SafeDownloadError.Create(
+        DownloadErrorCode.TooLarge,
+        DownloadStage.Downloading,
+        "The selected media stream exceeds the 5 GiB staging limit.",
+        RetryAction.UserActionRequired,
+        new RedactedDiagnosticToken("diag-local-stream-too-large"));
 }

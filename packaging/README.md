@@ -1,6 +1,6 @@
 Packaging and provenance workflow
 
-The package is an unsigned, self-contained .NET directory artifact. The workflow does not download yt-dlp, Deno, FFmpeg, or FFprobe and does not read credentials. Those tools remain explicit local prerequisites validated by the application's `unifi-downloader.tools.json` contract. For the operator manifest and digest procedure, see [`docs/tool-manifest.md`](../docs/tool-manifest.md). For native qualification and release approval, see [`docs/release-runbook.md`](../docs/release-runbook.md).
+The package is an unsigned, self-contained YouTube Downloader .NET directory artifact. The workflow does not download yt-dlp, Deno, FFmpeg, or FFprobe and does not read credentials. Those tools remain explicit local prerequisites validated by the application's `unifi-downloader.tools.json` contract. For the operator manifest and digest procedure, see [`docs/tool-manifest.md`](../docs/tool-manifest.md). For native qualification and release approval, see [`docs/release-runbook.md`](../docs/release-runbook.md).
 
 Prerequisites
 
@@ -24,8 +24,8 @@ The command performs locked restore, self-contained onedir publish, deterministi
 
 Outputs
 
-    artifacts/<version>/<rid>/unifi-downloader-<rid>/
-    artifacts/<version>/<rid>/unifi-downloader-<version>-<rid>.tar.gz|.zip
+    artifacts/<version>/<rid>/youtube-downloader-<rid>/
+    artifacts/<version>/<rid>/youtube-downloader-<version>-<rid>.tar.gz|.zip
     artifacts/<version>/<rid>/SHA256SUMS
 
 The directory contains PROVENANCE.json, tool-provenance.json, SBOM.spdx.json, NOTICE.md, RELEASE-GATES.md, a non-runnable example tools manifest, and SHA256SUMS. A runtime tools manifest is intentionally not supplied: the app must fail closed until release engineering records verified local paths and trusted hashes for all four external tools.

@@ -53,6 +53,30 @@ public sealed class FfmpegProcessAdapterTests
     }
 
     [Fact]
+    public async Task Matroska_remux_allocates_mkv_and_preserves_selected_codecs()
+    {
+        using var fixture = Fixture.Create(FixtureMode.WriteNonEmptyOutput);
+        using var workspace = TestWorkspace.Create();
+        var result = await CreateAdapter(fixture).ProcessAsync(
+            Plan(hasVideo: true, hasAudio: true, target: OutputContainer.Matroska),
+            new FfmpegInputSet(workspace.Input("video.webm"), workspace.Input("audio.opus")),
+            new FfmpegStageTarget(workspace.StageRoot),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(OutputContainer.Matroska, result.Value!.Artifact.Container);
+        Assert.EndsWith(".mkv", result.Value.Artifact.FileName, StringComparison.Ordinal);
+        Assert.Equal(
+            [
+                "-hide_banner", "-nostdin", "-loglevel", "error", "-n",
+                "-i", workspace.Input("video.webm"), "-i", workspace.Input("audio.opus"),
+                "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy",
+                "-f", "matroska"
+            ],
+            fixture.ReadArguments()[..^1]);
+    }
+
+    [Fact]
     public async Task Successful_output_is_registered_in_the_shared_staged_registry()
     {
         using var fixture = Fixture.Create(FixtureMode.WriteNonEmptyOutput);
@@ -325,7 +349,7 @@ public sealed class FfmpegProcessAdapterTests
         Assert.Contains("final-destination-SENTINEL", finalDestinationStem, StringComparison.Ordinal);
         var finalDestinationPlan = plan with
         {
-            Request = plan.Request with { Output = new OutputOptions(workspace.StageRoot, finalDestinationStem) }
+            Request = plan.Request with { Output = new OutputOptions(workspace.StageRoot, finalDestinationStem, OutputContainer.UnifiMp4) }
         };
         var finalDestination = await CreateAdapter(fixture).ProcessAsync(
             finalDestinationPlan,
@@ -475,11 +499,11 @@ public sealed class FfmpegProcessAdapterTests
             new DownloadRequest(
                 new VideoReference(new Uri(VideoUrl)),
                 hasVideo ? DownloadOperation.Video : DownloadOperation.Audio,
-                new OutputOptions("/tmp/synthetic-final-destination", "user-final-SENTINEL", FrameRateTarget: frameRateTarget),
+                new OutputOptions("/tmp/synthetic-final-destination", "user-final-SENTINEL", target, FrameRateTarget: frameRateTarget),
                 BrowserSessionSelection.Create(BrowserKind.Firefox)),
             new MediaCharacteristics(OutputContainer.Mp4, videoCodec, audioCodec, hasVideo, hasAudio, sourceFrameRate),
-            hasVideo ? new MediaSource(new Uri(VideoStreamUrl)) : null,
-            hasAudio ? new MediaSource(new Uri(AudioStreamUrl)) : null);
+            hasVideo ? "video-format" : null,
+            hasAudio ? "audio-format" : null);
 
     private enum FixtureMode
     {

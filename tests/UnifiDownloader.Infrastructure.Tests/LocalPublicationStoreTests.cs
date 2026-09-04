@@ -9,10 +9,11 @@ public sealed class LocalPublicationStoreTests
     [Theory]
     [InlineData(OutputContainer.Mp4)]
     [InlineData(OutputContainer.UnifiMp4)]
-    public async Task Publishes_each_supported_container_to_verified_mp4_and_consumes_source(OutputContainer container)
+    [InlineData(OutputContainer.Matroska)]
+    public async Task Publishes_each_supported_container_to_verified_output_and_consumes_source(OutputContainer container)
     {
         using var fixture = Fixture.Create();
-        var artifact = fixture.Register("video.mp4", container, "synthetic staged bytes");
+        var artifact = fixture.Register(container == OutputContainer.Matroska ? "video.mkv" : "video.mp4", container, "synthetic staged bytes");
         var diagnostics = new TestDiagnostics();
         var published = new PublishedOutputRegistry();
         var result = await new LocalPublicationStore(fixture.Registry, published, diagnostics).PublishAsync(
@@ -23,7 +24,7 @@ public sealed class LocalPublicationStoreTests
         Assert.True(result.IsSuccess);
         Assert.NotNull(result.Value);
         var output = result.Value!;
-        Assert.Equal("safe video.mp4", output.FileName);
+        Assert.Equal($"safe video.{(container == OutputContainer.Matroska ? "mkv" : "mp4")}", output.FileName);
         Assert.Matches("^output-[0-9a-f]{32}$", output.OutputKey);
         Assert.Equal(22, output.LengthBytes);
         Assert.True(published.TryResolve(output, out var finalPath));
@@ -44,13 +45,13 @@ public sealed class LocalPublicationStoreTests
         File.WriteAllText(final, "pre-existing");
         var store = new LocalPublicationStore(fixture.Registry, new PublishedOutputRegistry(), new TestDiagnostics());
 
-        var collision = await store.PublishAsync(artifact, new OutputOptions(fixture.Destination, "same"), CancellationToken.None);
+        var collision = await store.PublishAsync(artifact, new OutputOptions(fixture.Destination, "same", OutputContainer.UnifiMp4), CancellationToken.None);
         Assert.False(collision.IsSuccess);
         Assert.Equal(DownloadErrorCode.PublicationConflict, collision.Error!.Code);
         Assert.Equal("pre-existing", File.ReadAllText(final));
         Assert.True(fixture.SourceExists);
 
-        var overwrite = await store.PublishAsync(artifact, new OutputOptions(fixture.Destination, "new", AllowOverwrite: true), CancellationToken.None);
+        var overwrite = await store.PublishAsync(artifact, new OutputOptions(fixture.Destination, "new", OutputContainer.UnifiMp4, AllowOverwrite: true), CancellationToken.None);
         Assert.False(overwrite.IsSuccess);
         Assert.Equal(DownloadErrorCode.PublicationConflict, overwrite.Error!.Code);
         Assert.True(fixture.SourceExists);
@@ -66,7 +67,7 @@ public sealed class LocalPublicationStoreTests
 
         foreach (var directory in new[] { "relative", Path.Combine(fixture.Root, "missing") })
         {
-            var result = await store.PublishAsync(artifact, new OutputOptions(directory, "name"), CancellationToken.None);
+            var result = await store.PublishAsync(artifact, new OutputOptions(directory, "name", OutputContainer.UnifiMp4), CancellationToken.None);
             Assert.False(result.IsSuccess);
             Assert.Equal(DownloadErrorCode.InvalidRequest, result.Error!.Code);
             Assert.True(fixture.SourceExists);
@@ -76,7 +77,7 @@ public sealed class LocalPublicationStoreTests
         {
             var link = Path.Combine(fixture.Root, "destination-link");
             Directory.CreateSymbolicLink(link, fixture.Destination);
-            var result = await store.PublishAsync(artifact, new OutputOptions(link, "name"), CancellationToken.None);
+            var result = await store.PublishAsync(artifact, new OutputOptions(link, "name", OutputContainer.UnifiMp4), CancellationToken.None);
             Assert.False(result.IsSuccess);
             Assert.Equal(DownloadErrorCode.InvalidRequest, result.Error!.Code);
             Assert.True(fixture.SourceExists);
@@ -117,7 +118,7 @@ public sealed class LocalPublicationStoreTests
         Assert.True(File.Exists(outsideSource));
         var outsideBefore = File.ReadAllText(outsideSource);
         var result = await new LocalPublicationStore(fixture.Registry, new PublishedOutputRegistry(), new TestDiagnostics())
-            .PublishAsync(artifact, new OutputOptions(fixture.Destination, "replaced-root"), CancellationToken.None);
+            .PublishAsync(artifact, new OutputOptions(fixture.Destination, "replaced-root", OutputContainer.UnifiMp4), CancellationToken.None);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(DownloadErrorCode.InvalidRequest, result.Error!.Code);
@@ -240,7 +241,7 @@ public sealed class LocalPublicationStoreTests
         cancellation.Cancel();
         var result = await new LocalPublicationStore(fixture.Registry, new PublishedOutputRegistry(), new TestDiagnostics()).PublishAsync(
             artifact,
-            new OutputOptions(fixture.Destination, "cancelled"),
+            new OutputOptions(fixture.Destination, "cancelled", OutputContainer.UnifiMp4),
             cancellation.Token);
 
         Assert.False(result.IsSuccess);
@@ -259,7 +260,7 @@ public sealed class LocalPublicationStoreTests
         var registry = new PublishedOutputRegistry();
         var result = await new LocalPublicationStore(fixture.Registry, registry, diagnostics).PublishAsync(
             artifact,
-            new OutputOptions(fixture.Destination, "warning"),
+            new OutputOptions(fixture.Destination, "warning", OutputContainer.UnifiMp4),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);

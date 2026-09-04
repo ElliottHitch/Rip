@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
   <title id="title">Resilient YouTube downloader pipeline</title>
-  <desc id="desc">A six-stage pipeline: input URL, metadata and format resolution, bounded retry and fresh re-resolution, separate video and audio stream downloads, remux or transcode, and non-overwriting final MP4 publication. The publisher uses a private temporary copy, a same-directory final rename, and final verification. Existing destinations are rejected. An HTTP 403 branch gets one best-effort refresh; after retry exhaustion the app shows an error and does not bypass service restrictions.</desc>
+  <desc id="desc">A six-stage general-purpose downloader pipeline: input URL, metadata and format resolution, bounded retry and fresh re-resolution, highest-quality dedicated video and audio downloads or one progressive combined fallback, generic remux or optional compatibility transcode, and non-overwriting final publication. The publisher uses a private temporary copy, a same-directory final rename, and final verification. Existing destinations are rejected. An HTTP 403 branch gets one best-effort refresh; after retry exhaustion the app shows an error and does not bypass service restrictions.</desc>
 
   <rect width="1200" height="560" rx="24" fill="#08121f"/>
   <rect x="1" y="1" width="1198" height="558" rx="23" fill="none" stroke="#1f3a52"/>
 
-  <text x="52" y="50" fill="#5eead4" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="2.2">DOWNLOAD PIPELINE / UNIFI-READY MP4</text>
+  <text x="52" y="50" fill="#5eead4" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="2.2">DOWNLOAD PIPELINE / GENERAL DEFAULT</text>
   <text x="52" y="91" fill="#edf6fb" font-family="DejaVu Sans, Arial, sans-serif" font-size="31" font-weight="700">From URL to a verified final file</text>
   <text x="52" y="119" fill="#9db2c6" font-family="DejaVu Sans, Arial, sans-serif" font-size="16">Resolve once, recover within a bound, then publish only after FFmpeg and output checks complete.</text>
 
@@ -32,9 +32,9 @@
     <text x="251" y="198" text-anchor="middle" fill="#5eead4" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="700">02</text>
     <text x="281" y="198" fill="#edf6fb" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700">Resolve</text>
     <text x="281" y="219" fill="#edf6fb" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700">metadata + formats</text>
-    <text x="243" y="257" fill="#9db2c6" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">yt-dlp selects best</text>
-    <text x="243" y="275" fill="#9db2c6" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">video and audio</text>
-    <text x="243" y="293" fill="#9db2c6" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">streams</text>
+    <text x="243" y="257" fill="#9db2c6" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">yt-dlp selects highest</text>
+    <text x="243" y="275" fill="#9db2c6" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">video + audio, or one</text>
+    <text x="243" y="293" fill="#9db2c6" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">progressive fallback</text>
   </g>
 
   <!-- Stage 3 -->
@@ -56,7 +56,7 @@
     <circle cx="631" cy="192" r="17" fill="#163b52" stroke="#5eead4" stroke-width="2"/>
     <text x="631" y="198" text-anchor="middle" fill="#5eead4" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="700">04</text>
     <text x="661" y="198" fill="#edf6fb" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700">Download</text>
-    <text x="661" y="219" fill="#edf6fb" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700">streams</text>
+    <text x="661" y="219" fill="#edf6fb" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700">pair or combined</text>
     <rect x="623" y="243" width="58" height="26" rx="6" fill="#163b52" stroke="#35657d"/>
     <rect x="695" y="243" width="58" height="26" rx="6" fill="#163b52" stroke="#35657d"/>
     <text x="652" y="260" text-anchor="middle" fill="#9ddfd6" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="700">VIDEO</text>
@@ -72,8 +72,8 @@
     <text x="821" y="198" text-anchor="middle" fill="#5eead4" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="700">05</text>
     <text x="851" y="198" fill="#edf6fb" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700">Remux or</text>
     <text x="851" y="219" fill="#edf6fb" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700">transcode</text>
-    <text x="813" y="257" fill="#9db2c6" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">H.264 + AAC in MP4</text>
-    <text x="813" y="275" fill="#9db2c6" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">24 / 25 / 30 fps target</text>
+    <text x="813" y="257" fill="#9db2c6" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">Generic remux / Matroska</text>
+    <text x="813" y="275" fill="#9db2c6" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">UniFi MP4 is opt-in</text>
     <text x="813" y="293" fill="#9db2c6" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">CPU fallback when needed</text>
   </g>
 
@@ -86,7 +86,7 @@
     <text x="1041" y="219" fill="#edf6fb" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700">without overwrite</text>
     <text x="1003" y="257" fill="#a9d8cb" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">Private temp copy</text>
     <text x="1003" y="275" fill="#a9d8cb" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">Same-directory rename</text>
-    <text x="1003" y="293" fill="#a9d8cb" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">Verify final MP4</text>
+    <text x="1003" y="293" fill="#a9d8cb" font-family="DejaVu Sans, Arial, sans-serif" font-size="12">Verify final output</text>
   </g>
 
   <!-- Recovery / failure branch -->

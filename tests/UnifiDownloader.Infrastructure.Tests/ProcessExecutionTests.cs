@@ -63,6 +63,24 @@ public sealed class ProcessExecutionTests
     }
 
     [Fact]
+    public async Task Human_readable_ansi_403_is_classified_as_access_denied_without_control_output()
+    {
+        const string signedDiagnosticSentinel = "https://googlevideo.example.invalid/videoplayback?signature=ANSI_SIGNATURE_SENTINEL";
+        const string humanError = "\u001b[31mERROR: HTTP Error 403: Forbidden\u001b[0m " + signedDiagnosticSentinel;
+        using var tool = FixtureTool.Create($"printf '%s' {ShellQuote(humanError)} >&2; exit 17");
+
+        var result = await CreateExecutor(tool).ExecuteAsync(
+            new ProcessSpec("fixture", Array.Empty<string>(), TimeSpan.FromSeconds(2)), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(DownloadErrorCode.AccessDenied, result.Error!.Code);
+        Assert.Equal(RetryAction.RefreshStream, result.Error.Retry);
+        Assert.DoesNotContain("ANSI_SIGNATURE_SENTINEL", result.Error.UserMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u001b", result.Error.UserMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("googlevideo", result.Error.UserMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Unknown_structured_nonzero_exit_remains_generic_and_safe()
     {
         using var tool = FixtureTool.Create("printf '%s' '{\"error_code\":\"not-allowlisted\",\"detail\":\"UNKNOWN_STRUCTURED_SENTINEL\"}' >&2; exit 17");
@@ -189,6 +207,8 @@ public sealed class ProcessExecutionTests
             new HashSet<string> { tool.Repository },
             "linux-arm64",
             new Dictionary<ToolKey, ToolExpectation> { [ToolKey.Deno] = tool.TrustedExpectation() });
+
+    private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
 
     private sealed class FixtureTool : IDisposable
     {

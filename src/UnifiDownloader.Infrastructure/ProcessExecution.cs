@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using UnifiDownloader.Application;
 using UnifiDownloader.Domain;
 
@@ -316,8 +317,18 @@ public sealed class BoundedProcessExecutor : IProcessExecutor
             return SafeInfrastructureErrors.StructuredProcessFailure(structured);
         }
 
+        // yt-dlp's normal human-readable stderr is untrusted but status codes are stable.
+        // Classify them here so the application can apply its single stream-refresh policy.
+        if (ContainsHttpStatus(result.StandardError, 403) || ContainsHttpStatus(result.StandardOutput, 403))
+            return SafeInfrastructureErrors.StructuredProcessFailure("access-denied");
+        if (ContainsHttpStatus(result.StandardError, 429) || ContainsHttpStatus(result.StandardOutput, 429))
+            return SafeInfrastructureErrors.StructuredProcessFailure("rate-limited");
+
         return SafeInfrastructureErrors.ProcessExitedNonzero();
     }
+
+    private static bool ContainsHttpStatus(string output, int statusCode) =>
+        Regex.IsMatch(output, $"\\bHTTP(?:\\s+Error)?\\s+{statusCode}\\b|\\bError\\s+{statusCode}\\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static bool TryReadStructuredFailure(string output, out string code)
     {

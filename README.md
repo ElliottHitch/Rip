@@ -1,4 +1,4 @@
-# YouTube downloader for Unifi Connect
+# YouTube Downloader
 
 This repository is migrating from the preserved Python/Tkinter launcher to a .NET 10 desktop application with an Avalonia shell. The target entry point is `src/UnifiDownloader.App`, a single-window shell over typed Core and Infrastructure boundaries. The shell gate is implemented and deterministic tests pass, but platform, packaging, live-media, and release gates remain open. It is not a release artifact.
 
@@ -10,16 +10,16 @@ The shell exposes these controls and policies. It uses an explicit local tool ma
 
 - One single-video URL per download. Playlist and multi-video extractor results are rejected.
 - Metadata, Video, and Audio are separate run choices. Metadata resolves safe information only and publishes no media.
-- Separate video and audio stream downloads, followed by remuxing or transcoding.
-- An output folder field for the destination. The compatibility default is `~/Videos/Unifi Downloads` when a configured composition supplies it.
+- Separate video and audio stream downloads (or one progressive stream when that is the only available option), followed by generic lossless remuxing or compatibility transcoding.
+- An output folder field for the destination. Generic Matroska output is the default; UniFi MP4 is an explicit opt-in compatibility profile.
 - Output names based on the video title. Filenames are cleaned for filesystem use. An existing destination is rejected with a safe publication-conflict message; the publisher never overwrites it or adds a collision suffix.
-- An optional frame-rate target with `Preserve source`, `24 FPS`, `25 FPS`, or `30 FPS`. A target may require conversion.
+- Compatibility mode preserves source rates already at 24, 25, or 30 FPS and converts unsupported or unknown rates to 30 FPS. Generic mode preserves the source frame rate.
 - A Test Environment action that reports safe local statuses for yt-dlp, Deno, FFmpeg, FFprobe, and the .NET runtime.
 - A Cancel action, visible stages, progress when a size or duration is available, and an Activity Log with URL and credential-like values redacted from error details.
 - An optional, per-download browser-session control. When explicitly enabled, yt-dlp reads the selected local browser session through its supported `cookiesfrombrowser` option; the default path reads no browser data.
-- An `Open in Browser` action that opens only the verified, completed local MP4 through the operating system's default browser.
+- An `Open in Browser` action that opens only the verified, completed local output through the operating system's default handler.
 
-The app targets this Unifi output contract:
+When enabled, the app targets this UniFi compatibility contract:
 
 | Property | Target |
 | --- | --- |
@@ -34,23 +34,25 @@ When both selected streams already meet the app's checks, it remuxes them withou
 
 ## Pipeline overview
 
-![Six-stage downloader pipeline from a single-video URL through metadata and format resolution, one bounded 403 refresh, separate video and audio downloads, remux or transcode, and non-overwriting publication of a verified MP4. HTTP 429 is not automatically re-resolved; failed recovery ends with Try Again and does not bypass service restrictions.](docs/assets/pipeline/downloader-pipeline.svg)
+![Six-stage downloader pipeline from a single-video URL through metadata and format resolution, one bounded 403 refresh, separate video and audio downloads, remux or transcode, and non-overwriting publication of a verified media output. HTTP 429 is not automatically re-resolved; failed recovery ends with Try Again and does not bypass service restrictions.](docs/assets/pipeline/downloader-pipeline.svg)
 
 If the SVG is unavailable, the same flow is:
 
 1. Enter a single-video URL. For Video or Audio, enter a destination folder and file stem. Browser-session access is off by default.
 2. Optionally check `Use browser session`, review the disclosure, and choose one supported browser. This permission applies to this download only; the shell accepts no profile field.
-3. yt-dlp fetches metadata and selects separate video and audio formats.
-4. The app downloads the video stream and audio stream into temporary files.
-5. FFmpeg remuxes compatible streams or transcodes them to the target profile. The current target adapter uses CPU x264; GPU acceleration is not qualified by this shell gate.
+3. yt-dlp fetches metadata and selects a dedicated video/audio pair, falling back to one progressive format when necessary.
+4. yt-dlp stages the selected signed media streams into temporary files; the default path does not send signed URLs through a second HTTP client.
+5. FFmpeg losslessly remuxes generic output or transcodes it to the explicit UniFi compatibility profile. The current target adapter uses CPU x264; GPU acceleration is not qualified by this shell gate.
 6. FFmpeg writes to a staging file. The publisher copies the owned source to a private temporary file in the selected destination, verifies its positive exact length, and commits it with a same-directory rename that does not overwrite an existing file. An existing destination is a safe publication conflict, not a request for a suffix or overwrite.
-7. The app re-verifies the final non-empty MP4 before reporting completion. It then cleans and unregisters the source when possible. If cleanup fails after the final file is committed, the verified output is preserved and the app reports a cleanup warning. `Open in Browser` is enabled only after the final output passes its separate verification gate.
+7. The app re-verifies the final non-empty MP4 or Matroska file before reporting completion. It then cleans and unregisters the source when possible. If cleanup fails after the final file is committed, the verified output is preserved and the app reports a cleanup warning. `Open in Browser` is enabled only after the final output passes its separate verification gate.
 
 Publication uses the selected destination as an existing regular folder. Invalid destinations, unsafe file stems, and overwrite requests fail safely. The same-directory rename is the publication commit step, but this local contract does not claim whole-operation atomicity or hard-link support across all filesystems. Filesystem races between validation and later operations, live provider/media behavior, and platform-specific opener behavior remain outside this verification gate.
 
 ## Prerequisites
 
 The target shell uses the .NET SDK pinned in `global.json`, currently `10.0.400`, and Avalonia `12.1.2` packages. It does not download or discover runtime tools. Supply an approved `unifi-downloader.tools.json` manifest before a media run. The default manifest location is beside the application binary; `UNIFI_DOWNLOADER_TOOL_MANIFEST` selects another file. Relative executable paths resolve from the manifest directory. Missing, malformed, unverified, hash-mismatched, or wrong-RID entries produce unavailable capabilities and keep Start disabled.
+
+The legacy Python path pins `yt-dlp[default]` so its EJS scripts are installed. YouTube extraction also requires a supported local JavaScript runtime; Deno is the recommended/default runtime. See the official [yt-dlp dependencies](https://github.com/yt-dlp/yt-dlp#dependencies) and [EJS wiki](https://github.com/yt-dlp/yt-dlp/wiki/EJS). The app checks EJS and Deno readiness locally before starting a download; it does not enable remote components or download runtimes/scripts automatically.
 
 The manifest must name yt-dlp, Deno, FFmpeg, and FFprobe with exact versions, target RID, HTTPS source repository, executable path, SHA-256 digest, and `isVerified: true`. A separate `trustedExpectations` entry is required for each tool. The loader rejects HTTP repositories, duplicate or unmatched entries, comment/trailing-comma JSON, and a manifest for another RID. Follow [the tool manifest and provenance guide](docs/tool-manifest.md); do not put credentials, cookies, signed URLs, or profile paths in the file.
 
@@ -81,7 +83,7 @@ The unsigned, self-contained directory package workflow is in `packaging/README.
 
 The workflow never downloads or bundles yt-dlp, Deno, FFmpeg, or FFprobe. It records their versions, repositories, target assets, digests, and blockers in `tool-provenance.json`; the application still requires a separately approved `unifi-downloader.tools.json` with verified local paths and trusted expectations. Cross-published x64 artifacts are not native runtime qualification. Signing, publication, updates, rollback exercise, installer packaging, and live-media tests remain separate release gates.
 
-The window has Request, Output, Browser session, Environment, Run controls, Activity, Completion, and status regions. Choose one operation: `Metadata`, `Video`, or `Audio`. Metadata disables output controls and reports safe metadata without publishing a file. Video and Audio use the output settings. The frame-rate selector maps to `Preserve source`, `24 FPS`, `25 FPS`, or `30 FPS`, and resets to `Preserve source` for a new run.
+The window has Request, Output, Browser session, Environment, Run controls, Activity, Completion, and status regions. Choose one operation: `Metadata`, `Video`, or `Audio`. Metadata disables output controls and reports safe metadata without publishing a file. Video and Audio use the output settings. The frame-rate compatibility policy preserves an allowed source rate or converts unsupported and unknown rates to 30 FPS; the UI no longer exposes a manual frame-rate selector.
 
 When a desktop storage provider is available, `Choose Output Folder` opens the platform folder picker after the window is ready. It allows one folder, returns only a safe local filesystem path, and uses the current typed path only as a best-effort suggested location. The output field remains editable. Canceling the dialog, returning an unsupported URI, or failing to initialize the provider leaves the field unchanged and explains that you can type a destination. The control is disabled for Metadata and while a run is active. Native picker behavior still needs interactive qualification on the declared target platforms.
 
@@ -102,7 +104,7 @@ Browser-session availability depends on the installed browser, OS permissions, p
 These are separate actions. `Open in Browser` is post-download only.
 
 - Browser-session access affects yt-dlp metadata and stream requests only after explicit consent. It is not a bot-detection workaround or a guarantee of access.
-- `Open in Browser` runs only after a non-empty final MP4 has been published and verified. It sends an encoded local `file://` URI to the default browser and makes no YouTube request. It does not retry a download, repair a failed metadata request, solve bot detection, or change the access/session setting.
+- `Open in Browser` runs only after a non-empty final media file has been published and verified. The file is normally Matroska in generic mode or MP4 in UniFi compatibility mode. The action sends an encoded local `file://` URI to the default browser and makes no YouTube request. It does not retry a download, repair a failed metadata request, solve bot detection, or change the access/session setting.
 
 On headless systems or systems without a default file handler, opening may fail. The shell reports a safe opener failure without exposing the URI or full path. If the completed file has been moved or deleted, the action is disabled after the local verification gate fails. A completed file over 5 GB remains eligible for Open in Browser while retaining the existing Unifi-compliance warning.
 
@@ -177,7 +179,9 @@ The .NET suite uses deterministic fixtures and does not contact YouTube. Run it 
 
 ```sh
 dotnet restore --locked-mode
-dotnet test --configuration Release --no-restore
+dotnet run --project tests/UnifiDownloader.Core.Tests/UnifiDownloader.Core.Tests.csproj --configuration Release --no-build --no-restore
+dotnet run --project tests/UnifiDownloader.Infrastructure.Tests/UnifiDownloader.Infrastructure.Tests.csproj --configuration Release --no-build --no-restore
+dotnet run --project tests/UnifiDownloader.App.Tests/UnifiDownloader.App.Tests.csproj --configuration Release --no-build --no-restore
 dotnet run --project src/UnifiDownloader.App/UnifiDownloader.App.csproj --configuration Release --no-build --no-restore -- --deterministic-smoke
 git diff --check
 ```
@@ -189,7 +193,7 @@ python -m unittest discover -s tests -v
 python -m py_compile app.py tests/test_pipeline.py
 ```
 
-These tests cover one-video validation, metadata-only versus media operations, typed container and frame-rate mapping, bounded 403 refresh and no automatic 429 recovery, cancellation and stale-event rejection, redacted diagnostics, staged non-overwriting publication, cleanup warnings, output verification, browser-session option propagation and reset, encoded local file URIs, safe opener failures, and missing-capability states. They do not prove live service availability, real browser-profile behavior, account access, native default-handler integration on every OS, every real-media FFmpeg combination, whole-operation atomicity, or the absence of check-then-use filesystem races.
+These tests cover one-video validation, metadata-only versus media operations, typed container and frame-rate mapping, progressive fallback, bounded 403 refresh and no automatic 429 recovery, cancellation and stale-event rejection, redacted diagnostics, staged non-overwriting publication, cleanup warnings, output verification, browser-session option propagation and reset, encoded local file URIs, safe opener failures, and missing-capability states. They do not prove live service availability, real browser-profile behavior, account access, native default-handler integration on every OS, every real-media FFmpeg combination, whole-operation atomicity, packaging, installers, or startup.
 
 During migration, `app.py` remains the runnable legacy and rollback path until the later shell, platform, packaging, and release gates pass. Rollback means selecting a prior verified artifact or launching that preserved path; it never moves, overwrites, or deletes downloaded media.
 
@@ -213,6 +217,6 @@ The generated PNG is an inspection artifact and is not part of the repository.
 - The current target media adapter uses CPU x264. NVENC and other GPU paths are not qualified by the shell gate.
 - Unknown source duration or stream size produces indeterminate progress rather than a fabricated percentage.
 - The 5 GB warning is based on the final file size. The app does not prevent a file from exceeding the limit.
-- Publication rejects an existing destination without overwriting it or adding a collision suffix. It copies the owned source to a private temporary file in the selected destination, verifies the copied length, commits with a same-directory non-overwriting rename, and re-verifies the final MP4. Cleanup is best effort; a post-commit cleanup warning preserves the verified output.
+- Publication rejects an existing destination without overwriting it or adding a collision suffix. It copies the owned source to a private temporary file in the selected destination, verifies the copied length, commits with a same-directory non-overwriting rename, and re-verifies the final media file. Cleanup is best effort; a post-commit cleanup warning preserves the verified output.
 - The verified local contract does not claim whole-operation atomicity, hard-link support, or universal filesystem/platform behavior. Check-then-use races and later platform/opener qualification remain release gates.
 - No real-media or live-service download is part of the deterministic test gate.

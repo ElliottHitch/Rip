@@ -54,6 +54,7 @@ public partial class MainWindow : Window
 
 
     private async void StartClicked(object? sender, RoutedEventArgs e) => await controller.StartAsync();
+    private async void RetryClicked(object? sender, RoutedEventArgs e) => await controller.RetryAsync();
     private async void ChooseOutputFolderClicked(object? sender, RoutedEventArgs e) => await controller.ChooseOutputFolderAsync();
     private void CancelClicked(object? sender, RoutedEventArgs e) => controller.Cancel();
     private async void TestEnvironmentClicked(object? sender, RoutedEventArgs e) => await controller.TestEnvironmentAsync();

@@ -131,6 +131,13 @@ public sealed class PresentationController : IDisposable
         }
     }
 
+    public async Task<bool> RetryAsync()
+    {
+        if (!ViewModel.CanRetry) return false;
+        ViewModel.PrepareRetry();
+        return await StartAsync().ConfigureAwait(false);
+    }
+
     public void Cancel()
     {
         if (!ViewModel.IsBusy) return;

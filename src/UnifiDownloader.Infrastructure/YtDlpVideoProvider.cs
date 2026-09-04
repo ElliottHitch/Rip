@@ -107,11 +107,29 @@ public sealed class YtDlpVideoProvider : IVideoProvider
             return Failure<MediaPlan>(SafeInfrastructureErrors.InvalidProviderResponse(DownloadStage.Resolving));
         }
 
-        var candidate = Select(parsed.Value!.Formats, selection);
-        if (candidate is null)
+        var formats = parsed.Value!.Formats;
+        if (selection == FormatSelection.Video)
         {
-            return Failure<MediaPlan>(SafeInfrastructureErrors.UnsupportedProviderFormat(DownloadStage.Resolving));
+            var video = SelectDedicatedVideo(formats);
+            var audio = SelectDedicatedAudio(formats);
+            if (video is not null && audio is not null)
+            {
+                return BuildVideoPlan(request, video, audio);
+            }
+
+            var progressive = SelectProgressive(formats);
+            if (progressive is not null)
+            {
+                return BuildProgressivePlan(request, progressive);
+            }
+
+            // Preserve the single-stream fallback when no complete dedicated pair exists.
+            // This also supports video-only and audio-only providers that expose no muxed
+            // progressive format.
         }
+
+        var candidate = Select(formats, selection);
+        if (candidate is null) return Failure<MediaPlan>(SafeInfrastructureErrors.UnsupportedProviderFormat(DownloadStage.Resolving));
 
         if (!TryMapContainer(candidate.Extension, out var sourceContainer))
         {
@@ -127,14 +145,57 @@ public sealed class YtDlpVideoProvider : IVideoProvider
             hasVideo,
             hasAudio,
             hasVideo ? candidate.FrameRate : null);
-        var source = new MediaSource(candidate.Source, candidate.LengthBytes);
         return new ProviderResult<MediaPlan>(
             new MediaPlan(
                 request,
                 characteristics,
-                selection == FormatSelection.Video ? source : null,
-                selection == FormatSelection.Audio ? source : null),
+                selection == FormatSelection.Video ? candidate.FormatId : null,
+                selection == FormatSelection.Audio ? candidate.FormatId : null,
+                selection == FormatSelection.Video ? candidate.LengthBytes : null,
+                selection == FormatSelection.Audio ? candidate.LengthBytes : null),
             null);
+    }
+
+    private static ProviderResult<MediaPlan> BuildVideoPlan(DownloadRequest request, FormatDescriptor video, FormatDescriptor audio)
+    {
+        if (!TryMapContainer(video.Extension, out var container))
+            return Failure<MediaPlan>(SafeInfrastructureErrors.UnsupportedProviderFormat(DownloadStage.Resolving));
+        var characteristics = new MediaCharacteristics(
+            container,
+            MapVideoCodec(video.VideoCodec),
+            MapAudioCodec(audio.AudioCodec),
+            HasVideo: true,
+            HasAudio: true,
+            video.FrameRate);
+        return new ProviderResult<MediaPlan>(new MediaPlan(
+            request,
+            characteristics,
+            video.FormatId,
+            audio.FormatId,
+            video.LengthBytes,
+            audio.LengthBytes), null);
+    }
+
+    private static ProviderResult<MediaPlan> BuildProgressivePlan(DownloadRequest request, FormatDescriptor progressive)
+    {
+        if (!TryMapContainer(progressive.Extension, out var container))
+            return Failure<MediaPlan>(SafeInfrastructureErrors.UnsupportedProviderFormat(DownloadStage.Resolving));
+        var characteristics = new MediaCharacteristics(
+            container,
+            MapVideoCodec(progressive.VideoCodec),
+            MapAudioCodec(progressive.AudioCodec),
+            HasVideo: true,
+            HasAudio: true,
+            progressive.FrameRate);
+        // Only the video format identity is populated: one input is staged and mapped to both tracks.
+        return new ProviderResult<MediaPlan>(new MediaPlan(
+            request,
+            characteristics,
+            progressive.FormatId,
+            null,
+            progressive.LengthBytes,
+            null,
+            IsProgressive: true), null);
     }
 
     private async ValueTask<ProviderResult<CapturedProcessResult>> RunAsync(
@@ -207,6 +268,15 @@ public sealed class YtDlpVideoProvider : IVideoProvider
         return candidates.FirstOrDefault(format => TryMapContainer(format.Extension, out _));
     }
 
+    private static FormatDescriptor? SelectDedicatedVideo(IReadOnlyList<FormatDescriptor> formats) =>
+        Select(formats.Where(static format => format.HasVideo && !format.HasAudio).ToArray(), FormatSelection.Video);
+
+    private static FormatDescriptor? SelectDedicatedAudio(IReadOnlyList<FormatDescriptor> formats) =>
+        Select(formats.Where(static format => format.HasAudio && !format.HasVideo).ToArray(), FormatSelection.Audio);
+
+    private static FormatDescriptor? SelectProgressive(IReadOnlyList<FormatDescriptor> formats) =>
+        Select(formats.Where(static format => format.HasVideo && format.HasAudio).ToArray(), FormatSelection.Video);
+
     private static string BrowserSelector(BrowserKind kind) => kind switch
     {
         BrowserKind.Chromium => "chromium",
@@ -221,6 +291,12 @@ public sealed class YtDlpVideoProvider : IVideoProvider
         if (extension is "mp4" or "m4a" or "m4v" or "mov")
         {
             container = OutputContainer.Mp4;
+            return true;
+        }
+
+        if (extension is "webm" or "mkv" or "opus" or "ogg")
+        {
+            container = OutputContainer.Matroska;
             return true;
         }
 

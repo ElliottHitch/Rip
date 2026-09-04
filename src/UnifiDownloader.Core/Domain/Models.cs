@@ -10,7 +10,8 @@ public enum DownloadOperation
 public enum OutputContainer
 {
     Mp4,
-    UnifiMp4
+    UnifiMp4,
+    Matroska
 }
 
 public enum BrowserKind
@@ -53,9 +54,10 @@ public sealed record BrowserSessionSelection
 public sealed record OutputOptions(
     string Directory,
     string FileStem,
-    OutputContainer Container = OutputContainer.UnifiMp4,
+    OutputContainer Container = OutputContainer.Matroska,
     bool AllowOverwrite = false,
-    double? FrameRateTarget = null);
+    double? FrameRateTarget = null,
+    bool UnifiCompatible = false);
 
 public sealed record DownloadRequest(
     VideoReference Video,
@@ -94,16 +96,14 @@ public sealed record MediaCharacteristics(
     bool HasAudio,
     double? FrameRate = null);
 
-public sealed record MediaSource(Uri Address, long? LengthBytes = null, DateTimeOffset? ExpiresAt = null)
-{
-    public override string ToString() => "[media-source]";
-}
-
 public sealed record MediaPlan(
     DownloadRequest Request,
     MediaCharacteristics Characteristics,
-    MediaSource? VideoSource = null,
-    MediaSource? AudioSource = null);
+    string? VideoFormatId = null,
+    string? AudioFormatId = null,
+    long? VideoLengthBytes = null,
+    long? AudioLengthBytes = null,
+    bool IsProgressive = false);
 
 public enum LocalMediaChannel
 {
@@ -200,11 +200,12 @@ public sealed record VerifiedLocalMp4
 
         if (string.IsNullOrWhiteSpace(fileName) ||
             fileName.Length > 255 ||
-            !fileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ||
-            fileName is ".mp4" or "." or ".." ||
+            !fileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) &&
+            !fileName.EndsWith(".mkv", StringComparison.OrdinalIgnoreCase) ||
+            fileName is ".mp4" or ".mkv" or "." or ".." ||
             fileName.Any(static character => char.IsControl(character) || character is '/' or '\\' or ':' or '?' or '#'))
         {
-            throw new ArgumentException("The published file name must be a safe MP4 basename.", nameof(fileName));
+            throw new ArgumentException("The published file name must be a safe output basename.", nameof(fileName));
         }
 
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(lengthBytes);

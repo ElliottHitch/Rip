@@ -25,7 +25,7 @@ public sealed record FfmpegStageTarget(string StageRoot);
 public sealed class FfmpegProcessAdapter
 {
     private static readonly string FfmpegExecutableKey = ToolKey.Ffmpeg.ToString();
-    private const string Mp4Extension = ".mp4";
+
     private const int MaximumStageAllocationAttempts = 8;
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
 
@@ -84,7 +84,7 @@ public sealed class FfmpegProcessAdapter
                 return Failure<MediaProcessingResult>(SafeInfrastructureErrors.UnsupportedMediaProcessingFormat());
             }
 
-            if (!TryAllocateOutput(stage.StageRoot, out var stagingKey, out var fileName, out outputPath))
+            if (!TryAllocateOutput(stage.StageRoot, plan.Request.Output.Container, out var stagingKey, out var fileName, out outputPath))
             {
                 return Failure<MediaProcessingResult>(SafeInfrastructureErrors.InvalidMediaProcessingRequest());
             }
@@ -170,16 +170,31 @@ public sealed class FfmpegProcessAdapter
             return false;
         }
 
-        if (!TryValidateChannel(
+        string? videoPath = null;
+        string? audioPath = null;
+        if (plan.IsProgressive)
+        {
+            if (!characteristics.HasVideo || !characteristics.HasAudio ||
+                string.IsNullOrWhiteSpace(plan.VideoFormatId) || plan.AudioFormatId is not null ||
+                !TryValidateRegularFile(inputs.VideoPath, out var progressiveVideo) ||
+                inputs.AudioPath is not null)
+            {
+                return false;
+            }
+
+            videoPath = progressiveVideo;
+            audioPath = null;
+        }
+        else if (!TryValidateChannel(
                 characteristics.HasVideo,
-                plan.VideoSource is not null,
+                !string.IsNullOrWhiteSpace(plan.VideoFormatId),
                 inputs.VideoPath,
-                out var videoPath) ||
+                out videoPath) ||
             !TryValidateChannel(
                 characteristics.HasAudio,
-                plan.AudioSource is not null,
+                !string.IsNullOrWhiteSpace(plan.AudioFormatId),
                 inputs.AudioPath,
-                out var audioPath))
+                out audioPath))
         {
             return false;
         }
@@ -196,7 +211,7 @@ public sealed class FfmpegProcessAdapter
             return false;
         }
 
-        if (videoPath is not null && audioPath is not null && PathsEqual(videoPath, audioPath))
+        if (!plan.IsProgressive && videoPath is not null && audioPath is not null && PathsEqual(videoPath, audioPath))
         {
             return false;
         }
@@ -204,7 +219,10 @@ public sealed class FfmpegProcessAdapter
         try
         {
             decision = FormatPolicy.Decide(plan.Request.Output.Container, characteristics);
-            frameRate = FrameRatePolicy.Decide(characteristics.FrameRate, plan.Request.Output.FrameRateTarget);
+            frameRate = FrameRatePolicy.Decide(
+                characteristics.FrameRate,
+                plan.Request.Output.FrameRateTarget,
+                plan.Request.Output.UnifiCompatible);
         }
         catch (ArgumentException)
         {
@@ -220,7 +238,7 @@ public sealed class FfmpegProcessAdapter
         return decision.Strategy switch
         {
             EncodingStrategy.Passthrough => characteristics.HasVideo && characteristics.HasAudio,
-            EncodingStrategy.Remux => characteristics.HasVideo && characteristics.HasAudio,
+            EncodingStrategy.Remux => characteristics.HasVideo || characteristics.HasAudio,
             EncodingStrategy.Transcode => true,
             _ => false
         };
@@ -332,6 +350,7 @@ public sealed class FfmpegProcessAdapter
 
     private static bool TryAllocateOutput(
         string stageRootCandidate,
+        OutputContainer container,
         out string stagingKey,
         out string fileName,
         out string outputPath)
@@ -347,7 +366,7 @@ public sealed class FfmpegProcessAdapter
         for (var attempt = 0; attempt < MaximumStageAllocationAttempts; attempt++)
         {
             stagingKey = $"stage-{Guid.NewGuid():N}";
-            fileName = stagingKey + Mp4Extension;
+            fileName = stagingKey + (container == OutputContainer.Matroska ? ".mkv" : ".mp4");
             outputPath = Path.Combine(stageRoot, fileName);
             if (PathsEqual(outputPath, stageRoot) || PathExists(outputPath))
             {
@@ -458,13 +477,18 @@ public sealed class FfmpegProcessAdapter
                 arguments.Add(inputs.VideoPath);
             }
 
-            if (inputs.AudioPath is not null)
+            if (inputs.AudioPath is not null &&
+                (inputs.VideoPath is null || !PathsEqual(inputs.VideoPath, inputs.AudioPath)))
             {
                 arguments.Add("-i");
                 arguments.Add(inputs.AudioPath);
             }
 
-            if (characteristics.HasVideo && characteristics.HasAudio)
+            if (inputs.AudioPath is null && characteristics.HasVideo && characteristics.HasAudio)
+            {
+                arguments.AddRange(["-map", "0:v:0", "-map", "0:a:0"]);
+            }
+            else if (characteristics.HasVideo && characteristics.HasAudio)
             {
                 arguments.AddRange(["-map", "0:v:0", "-map", "1:a:0"]);
             }
@@ -479,7 +503,8 @@ public sealed class FfmpegProcessAdapter
 
             if (strategy == EncodingStrategy.Remux)
             {
-                arguments.AddRange(["-c:v", "copy", "-c:a", "copy"]);
+                if (characteristics.HasVideo) arguments.AddRange(["-c:v", "copy"]);
+                if (characteristics.HasAudio) arguments.AddRange(["-c:a", "copy"]);
             }
             else
             {
@@ -515,8 +540,18 @@ public sealed class FfmpegProcessAdapter
                 }
             }
 
-            arguments.AddRange(["-movflags", "+faststart", "-f", "mp4", outputPath]);
+            if (OutputContainerFromPath(outputPath) == "mp4")
+            {
+                arguments.AddRange(["-movflags", "+faststart", "-f", "mp4", outputPath]);
+            }
+            else
+            {
+                arguments.AddRange(["-f", "matroska", outputPath]);
+            }
             return arguments;
         }
+
+        private static string OutputContainerFromPath(string outputPath) =>
+            Path.GetExtension(outputPath).Equals(".mkv", StringComparison.OrdinalIgnoreCase) ? "matroska" : "mp4";
     }
 }

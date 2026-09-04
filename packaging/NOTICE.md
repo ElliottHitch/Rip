@@ -2,7 +2,7 @@ Third-party notices inventory
 
 This is an engineering provenance inventory, not legal clearance for redistribution.
 
-- Unifi Downloader application: repository-local source, version recorded in PROVENANCE.json.
+- YouTube Downloader application: repository-local source, version recorded in PROVENANCE.json.
 - .NET SDK: exact version is recorded in PROVENANCE.json and global.json.
 - Avalonia, Avalonia.Desktop, Avalonia.Themes.Fluent: exact pinned versions are recorded in PROVENANCE.json and Directory.Packages.props.
 - yt-dlp: official standalone executable provenance is recorded in tool-provenance.json. It is not bundled by this workflow.
