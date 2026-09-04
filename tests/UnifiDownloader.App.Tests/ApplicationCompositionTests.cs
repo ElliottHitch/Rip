@@ -97,6 +97,7 @@ public sealed class ApplicationCompositionTests
             composed.ViewModel.VideoUrl = "https://fixture.invalid/watch?v=one";
             composed.ViewModel.OutputFolder = workspace.OutputRoot;
             composed.ViewModel.FileStem = "published-fixture";
+            composed.ViewModel.SelectedContainer = OutputContainer.UnifiMp4;
             Assert.True(composed.ViewModel.CanStart);
 
             Assert.True(await composed.Controller.StartAsync());

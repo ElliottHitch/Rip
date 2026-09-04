@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import math
 import os
 import queue
@@ -25,6 +26,7 @@ except ImportError as exc:  # Keep the GUI available to explain the missing depe
     YT_DLP_IMPORT_ERROR = exc
 
 ALLOWED_FPS = {24, 25, 30}
+DENO_MIN_VERSION = (2, 3, 0)
 TARGET_VIDEO_BITRATE = 40_000_000  # bits per second (40 Mbps)
 TARGET_AUDIO_BITRATE = 192_000  # bits per second
 MAX_FILE_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB
@@ -33,6 +35,7 @@ RETRY_BACKOFF_SECONDS = (5,)
 FFMPEG_CANCEL_GRACE_SECONDS = 0.5
 FFMPEG_READER_POLL_SECONDS = 0.1
 SELECT_BROWSER_LABEL = "Select a browser"
+GENERIC_CONTAINER_EXTENSIONS = {"mkv", "webm", "mp4", "m4v", "mov"}
 SUPPORTED_BROWSERS = (
     "Brave",
     "Chrome",
@@ -181,6 +184,14 @@ def is_verified_mp4(path: str) -> bool:
         return False
 
 
+def is_verified_output(path: str) -> bool:
+    """Verify a published generic output without implying it is browser-playable MP4."""
+    try:
+        return bool(path) and Path(path).suffix.casefold() in {".mp4", ".mkv"} and os.path.isfile(path) and os.path.getsize(path) > 0 and os.access(path, os.R_OK)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def local_file_uri(path: str) -> str:
     """Return a properly encoded URI for a local file, never a source URL."""
     return Path(path).expanduser().resolve().as_uri()
@@ -206,8 +217,8 @@ def completion_status(output_path: str, *, oversized: bool = False) -> Tuple[str
     filename = os.path.basename(output_path)
     if oversized:
         return (
-            f"Completed with warning: {filename} was saved, but it is not Unifi-compliant "
-            "because it exceeds the 5 GB single-file limit.",
+            f"Completed with warning: {filename} was saved, but it is not Unifi-compliant; it exceeds the "
+            "5 GB compatibility limit because it is larger than the bounded UniFi-compatible file size.",
             "#ffbf00",
         )
     return f"Completed: {filename}", "#4dcc7d"
@@ -218,9 +229,15 @@ def is_playlist_metadata(metadata: Dict) -> bool:
     return metadata.get("_type") in {"playlist", "multi_video"}
 
 
+def sanitize_child_output(text: str) -> str:
+    """Remove ANSI/control sequences before child text reaches visible UI or logs."""
+    text = re.sub(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\].*?(?:\x07|\x1b\\))", "", text or "")
+    return "".join(character for character in text if not ord(character) < 32 or character in "\n\r\t")
+
+
 def safe_error_detail(exc: BaseException) -> str:
     """Redact URLs and credential-like query values from diagnostics."""
-    detail = str(exc).replace("\n", " ").strip()
+    detail = sanitize_child_output(str(exc)).replace("\n", " ").strip()
     detail = re.sub(r"https?://[^\s]+", "<url>", detail, flags=re.IGNORECASE)
     detail = re.sub(
         r"(?i)(authorization|cookie|token|signature|sig|key|videoplayback)=[^&\s]+",
@@ -239,6 +256,10 @@ def ytdlp_status_code(exc: BaseException) -> Optional[int]:
 class EnvironmentStatus:
     yt_dlp_available: bool = False
     yt_dlp_version: Optional[str] = None
+    ejs_available: bool = False
+    deno_path: Optional[str] = None
+    deno_version: Optional[str] = None
+    deno_ready: bool = False
     ffmpeg_path: Optional[str] = None
     ffprobe_path: Optional[str] = None
     nvenc_available: bool = False
@@ -264,13 +285,35 @@ def human_readable_size(num_bytes: float) -> str:
 
 
 def probe_environment() -> EnvironmentStatus:
-    """Detect ffmpeg/ffprobe availability and NVENC support."""
+    """Detect yt-dlp/EJS/Deno and ffmpeg/ffprobe readiness without network access."""
     status = EnvironmentStatus()
     if yt_dlp is not None:
         status.yt_dlp_available = True
         status.yt_dlp_version = getattr(getattr(yt_dlp, "version", None), "__version__", None)
     else:
         status.issues.append("yt-dlp is not installed. Install the requirements before downloading.")
+    status.ejs_available = importlib.util.find_spec("yt_dlp_ejs") is not None
+    if not status.ejs_available:
+        status.issues.append("yt-dlp EJS scripts are missing. Install yt-dlp[default] before downloading.")
+    status.deno_path = shutil.which("deno")
+    if status.deno_path:
+        try:
+            deno_result = subprocess.run(
+                [status.deno_path, "--version"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            deno_output = sanitize_child_output((deno_result.stdout or "") + "\n" + (deno_result.stderr or ""))
+            match = re.search(r"(?im)^deno\s+(\d+)\.(\d+)\.(\d+)", deno_output)
+            if deno_result.returncode == 0 and match:
+                status.deno_version = ".".join(match.groups())
+                status.deno_ready = tuple(int(part) for part in match.groups()) >= DENO_MIN_VERSION
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+    if not status.deno_ready:
+        status.issues.append("Deno 2.3.0 or newer is required. Install a supported local JavaScript runtime before downloading.")
     status.ffmpeg_path = shutil.which("ffmpeg")
     status.ffprobe_path = shutil.which("ffprobe")
     if not status.ffmpeg_path:
@@ -318,7 +361,7 @@ def choose_target_fps(source_fps: Optional[float]) -> int:
 
 
 def pick_best_formats(info: Dict) -> Tuple[Dict, Dict]:
-    """Determine the best available video-only and audio-only formats."""
+    """Determine best dedicated streams, or one progressive fallback exactly once."""
     formats = info.get("formats") or []
     video_candidates = [
         fmt
@@ -331,17 +374,18 @@ def pick_best_formats(info: Dict) -> Tuple[Dict, Dict]:
         if fmt.get("acodec") not in (None, "none") and fmt.get("vcodec") in (None, "none", "")
     ]
 
-    if not video_candidates:
-        video_candidates = [
-            fmt for fmt in formats if fmt.get("vcodec") not in (None, "none")
-        ]
-    if not audio_candidates:
-        audio_candidates = [
-            fmt for fmt in formats if fmt.get("acodec") not in (None, "none")
-        ]
-
     if not video_candidates or not audio_candidates:
-        raise RuntimeError("Unable to locate suitable video/audio formats for this URL.")
+        progressive = [
+            fmt for fmt in formats
+            if fmt.get("vcodec") not in (None, "none") and fmt.get("acodec") not in (None, "none", "")
+        ]
+        if not progressive:
+            raise RuntimeError("Unable to locate suitable video/audio formats for this URL.")
+        best = max(progressive, key=lambda fmt: (
+            fmt.get("height") or 0, fmt.get("fps") or 0, fmt.get("tbr") or 0,
+            fmt.get("format_id", "")
+        ))
+        return best, best
 
     def video_key(fmt: Dict) -> Tuple:
         return (
@@ -349,6 +393,7 @@ def pick_best_formats(info: Dict) -> Tuple[Dict, Dict]:
             fmt.get("fps") or 0,
             fmt.get("tbr") or 0,
             -fmt.get("filesize", 0),
+            fmt.get("format_id", ""),
         )
 
     def audio_key(fmt: Dict) -> Tuple:
@@ -356,6 +401,7 @@ def pick_best_formats(info: Dict) -> Tuple[Dict, Dict]:
             fmt.get("abr") or fmt.get("tbr") or 0,
             fmt.get("asr") or 0,
             -fmt.get("filesize", 0),
+            fmt.get("format_id", ""),
         )
 
     best_video = max(video_candidates, key=video_key)
@@ -401,15 +447,17 @@ def parse_ffmpeg_time(progress_line: str) -> Optional[float]:
     return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
 
-def ensure_unique_path(directory: str, base_name: str) -> str:
-    """Generate a unique MP4 path inside directory."""
+def ensure_unique_path(directory: str, base_name: str, extension: str = ".mp4") -> str:
+    """Generate a unique output path inside directory."""
     os.makedirs(directory, exist_ok=True)
     directory = os.path.abspath(directory)
     base_name = sanitize_filename(base_name)
-    candidate = os.path.join(directory, f"{base_name}.mp4")
+    if not extension.startswith("."):
+        extension = "." + extension
+    candidate = os.path.join(directory, f"{base_name}{extension}")
     counter = 1
     while os.path.exists(candidate):
-        candidate = os.path.join(directory, f"{base_name} ({counter}).mp4")
+        candidate = os.path.join(directory, f"{base_name} ({counter}){extension}")
         counter += 1
     return candidate
 
@@ -417,7 +465,7 @@ def ensure_unique_path(directory: str, base_name: str) -> str:
 class YouTubeDownloaderApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Ultra Quality YouTube Downloader (Unifi Ready)")
+        self.root.title("YouTube Downloader")
         self.root.geometry("820x600")
         self.root.minsize(720, 520)
 
@@ -428,8 +476,9 @@ class YouTubeDownloaderApp:
         self.env_status = probe_environment()
 
         self.url_var = tk.StringVar()
-        default_dir = os.path.join(os.path.expanduser("~/Videos"), "Unifi Downloads")
+        default_dir = os.path.join(os.path.expanduser("~/Videos"), "YouTube Downloads")
         self.path_var = tk.StringVar(value=default_dir)
+        self.unifi_compatible_var = tk.BooleanVar(value=False)
         self.stage_var = tk.StringVar(value="Waiting for input")
         self.status_var = tk.StringVar(value="Ready.")
         self.progress_var = tk.IntVar(value=0)
@@ -487,8 +536,20 @@ class YouTubeDownloaderApp:
         self.path_entry.grid(row=1, column=1, sticky="ew", pady=5)
         ttk.Button(self.main_frame, text="Browse...", command=self._browse_directory).grid(row=1, column=2, sticky="ew", padx=(10, 0))
 
+        ttk.Checkbutton(
+            self.main_frame,
+            text="Make output UniFi-compatible (MP4 / H.264 / AAC)",
+            variable=self.unifi_compatible_var,
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        ttk.Label(
+            self.main_frame,
+            text="Off by default: preserve source codecs in a lossless container. Enable only for the bounded UniFi MP4 compatibility profile.",
+            wraplength=680,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=3, sticky="w")
+
         session_frame = ttk.LabelFrame(self.main_frame, text="Browser Session (optional)", padding=8)
-        session_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(5, 0))
+        session_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(5, 0))
         session_frame.columnconfigure(1, weight=1)
         self.browser_session_checkbutton = ttk.Checkbutton(
             session_frame,
@@ -525,7 +586,7 @@ class YouTubeDownloaderApp:
         ).grid(row=4, column=1, sticky="w", pady=(0, 2))
 
         button_frame = ttk.Frame(self.main_frame)
-        button_frame.grid(row=3, column=0, columnspan=3, pady=10, sticky="ew")
+        button_frame.grid(row=5, column=0, columnspan=3, pady=10, sticky="ew")
         button_frame.columnconfigure((0, 1, 2, 3, 4), weight=1, uniform="btn")
         self.download_button = ttk.Button(button_frame, text="Start Download", command=self.start_download)
         self.download_button.grid(row=0, column=0, padx=5, sticky="ew")
@@ -542,13 +603,13 @@ class YouTubeDownloaderApp:
         self.open_browser_button.grid(row=0, column=4, padx=5, sticky="ew")
 
         ttk.Label(self.main_frame, textvariable=self.stage_var, foreground=self.accent_color).grid(
-            row=4, column=0, columnspan=3, sticky="w", pady=(10, 0)
+            row=6, column=0, columnspan=3, sticky="w", pady=(10, 0)
         )
 
         self.progress_bar = ttk.Progressbar(
             self.main_frame, maximum=100, variable=self.progress_var, mode="determinate", style="Green.Horizontal.TProgressbar"
         )
-        self.progress_bar.grid(row=5, column=0, columnspan=3, sticky="ew", pady=8)
+        self.progress_bar.grid(row=7, column=0, columnspan=3, sticky="ew", pady=8)
 
         self.status_label = ttk.Label(
             self.main_frame,
@@ -558,16 +619,16 @@ class YouTubeDownloaderApp:
             justify="left",
             anchor="w",
         )
-        self.status_label.grid(row=6, column=0, columnspan=3, sticky="w")
+        self.status_label.grid(row=8, column=0, columnspan=3, sticky="w")
 
         env_frame = ttk.LabelFrame(self.main_frame, text="Environment", padding=10)
-        env_frame.grid(row=7, column=0, columnspan=3, sticky="ew", pady=10)
+        env_frame.grid(row=9, column=0, columnspan=3, sticky="ew", pady=10)
         self.env_label = ttk.Label(env_frame, textvariable=self.env_summary_var, justify="left")
         self.env_label.pack(fill="x")
 
         log_frame = ttk.LabelFrame(self.main_frame, text="Activity Log", padding=10)
-        log_frame.grid(row=8, column=0, columnspan=3, sticky="nsew")
-        self.main_frame.rowconfigure(8, weight=1)
+        log_frame.grid(row=10, column=0, columnspan=3, sticky="nsew")
+        self.main_frame.rowconfigure(10, weight=1)
         self.log_widget = tk.Text(
             log_frame,
             height=12,
@@ -712,7 +773,7 @@ class YouTubeDownloaderApp:
     def _set_completed_output(self, output_path: str):
         """Enable Open in Browser only after re-reading the published file."""
         def publish_if_verified():
-            if is_verified_mp4(output_path):
+            if is_verified_output(output_path):
                 self._completed_output_path = output_path
                 if hasattr(self, "open_browser_button"):
                     self.open_browser_button.configure(state="normal")
@@ -723,7 +784,7 @@ class YouTubeDownloaderApp:
 
     def _open_completed_in_browser(self):
         output_path = self._completed_output_path
-        if not output_path or not is_verified_mp4(output_path):
+        if not output_path or not is_verified_output(output_path):
             self._clear_completed_output()
             self._set_status(f"Error: {OPEN_BROWSER_MISSING_MESSAGE}", "#ff6b6b")
             messagebox.showerror("Open in Browser", OPEN_BROWSER_MISSING_MESSAGE)
@@ -740,9 +801,11 @@ class YouTubeDownloaderApp:
         self._set_status(f"Opened {filename} in your default browser.", "#4dcc7d")
 
     def _set_stage(self, text: str):
-        self.root.after(0, lambda: self.stage_var.set(text))
+        safe_text = sanitize_child_output(text)
+        self.root.after(0, lambda: self.stage_var.set(safe_text))
 
     def _set_status(self, text: str, color: str = "#e5e5e5"):
+        text = sanitize_child_output(text)
         def _update():
             self.status_var.set(text)
             self.status_label.configure(foreground=color)
@@ -767,6 +830,7 @@ class YouTubeDownloaderApp:
         self.progress_var.set(value)
 
     def _append_log(self, message: str):
+        message = sanitize_child_output(message)
         timestamp = time.strftime("%H:%M:%S")
         entry = f"[{timestamp}] {message}\n"
         self.root.after(0, lambda: self._write_log(entry))
@@ -794,7 +858,7 @@ class YouTubeDownloaderApp:
         else:
             messagebox.showinfo(
                 "Environment Check",
-                "FFmpeg and FFprobe detected.\nNVENC available: yes" if self.env_status.nvenc_available else "FFmpeg ready (CPU encoding mode).",
+                "yt-dlp EJS, Deno, FFmpeg, and FFprobe detected.\nNVENC available: yes" if self.env_status.nvenc_available else "yt-dlp EJS, Deno, FFmpeg, and FFprobe ready (CPU encoding mode).",
             )
 
     def _update_environment_summary(self):
@@ -803,6 +867,9 @@ class YouTubeDownloaderApp:
         else:
             version = self.env_status.yt_dlp_version or "unknown version"
             summary = f"yt-dlp: {version}\n"
+        summary += f"yt-dlp EJS scripts: {'available' if self.env_status.ejs_available else 'missing'}\n"
+        deno_label = self.env_status.deno_version or "missing/unparseable"
+        summary += f"Deno: {deno_label} ({'ready' if self.env_status.deno_ready else 'not ready'})\n"
         if not self.env_status.ffmpeg_path:
             summary += "FFmpeg: missing\n"
         else:
@@ -853,9 +920,15 @@ class YouTubeDownloaderApp:
                 "#ff6b6b",
             )
             return
+        if not self.env_status.ejs_available or not self.env_status.deno_ready:
+            self._set_status(
+                "yt-dlp EJS scripts and Deno 2.3.0 or newer are required. Install yt-dlp[default] and a supported local Deno runtime, then choose Test Environment.",
+                "#ff6b6b",
+            )
+            return
         if not self.env_status.ffmpeg_path:
             self._set_status(
-                "FFmpeg is required to create a Unifi-ready MP4. Install FFmpeg, then choose Test Environment.",
+                "FFmpeg is required to create the output file. Install FFmpeg, then choose Test Environment.",
                 "#ff6b6b",
             )
             return
@@ -921,10 +994,10 @@ class YouTubeDownloaderApp:
             output_path = self._transcode_and_mux(
                 video_path, audio_path, metadata, destination, video_fmt, audio_fmt
             )
-            if not is_verified_mp4(output_path):
+            if not is_verified_output(output_path):
                 raise PipelineError(
                     "publication",
-                    "Couldn't verify the completed MP4. Try the download again.",
+                    "Couldn't verify the completed output. Try the download again.",
                     "Final output verification failed.",
                 )
             published_output = True
@@ -941,12 +1014,14 @@ class YouTubeDownloaderApp:
         except DownloadCancelled:
             final_status = "Download cancelled. No completed file was saved."
             final_color = "#ff6b6b"
+            self._set_stage("Cancelled")
             self._set_status(final_status, final_color)
             self._append_log("Operation cancelled.")
         except PipelineError as exc:
             retry = True
             final_status = f"Error: {exc.user_message}"
             final_color = "#ff6b6b"
+            self._set_stage("Failed")
             self._set_status(final_status, final_color)
             self._append_log(f"Failed during {exc.stage}: {exc.detail}")
             if isinstance(exc, BrowserSessionError):
@@ -961,6 +1036,7 @@ class YouTubeDownloaderApp:
             detail = safe_error_detail(exc)
             final_status = "Error: The download could not be completed. Try again."
             final_color = "#ff6b6b"
+            self._set_stage("Failed")
             self._set_status(final_status, final_color)
             self._append_log(f"Unexpected pipeline error: {detail}")
         finally:
@@ -1093,10 +1169,16 @@ class YouTubeDownloaderApp:
                 # locals when a traceback inspector follows ``self``.
                 self._active_browser_options = {}
             raise converted_error
-        self._append_log(
-            f"Selected video {best_video.get('format_id')} ({best_video.get('height')}p) "
-            f"and audio {best_audio.get('format_id')} ({best_audio.get('abr') or best_audio.get('tbr')} kbps)."
-        )
+        if best_video.get("format_id") == best_audio.get("format_id"):
+            self._append_log(
+                f"Selected progressive format {best_video.get('format_id')} "
+                f"({best_video.get('height')}p; muxed video and audio)."
+            )
+        else:
+            self._append_log(
+                f"Selected video {best_video.get('format_id')} ({best_video.get('height')}p) "
+                f"and audio {best_audio.get('format_id')} ({best_audio.get('abr') or best_audio.get('tbr')} kbps)."
+            )
         return metadata, best_video, best_audio
 
     def _download_media(self, url: str, temp_dir: str) -> Tuple[str, str, Dict, Dict, Dict]:
@@ -1115,7 +1197,10 @@ class YouTubeDownloaderApp:
                         f"Warning: estimated size {human_readable_size(estimated_size)} exceeds 5 GB limit."
                     )
                 video_path = self._download_stream(url, best_video["format_id"], temp_dir, "video")
-                audio_path = self._download_stream(url, best_audio["format_id"], temp_dir, "audio")
+                if best_video.get("format_id") == best_audio.get("format_id"):
+                    audio_path = video_path
+                else:
+                    audio_path = self._download_stream(url, best_audio["format_id"], temp_dir, "audio")
                 return video_path, audio_path, metadata, best_video, best_audio
             except DownloadCancelled:
                 self._active_browser_options = {}
@@ -1307,7 +1392,7 @@ class YouTubeDownloaderApp:
                     continue
                 if line is None:
                     break
-                line = (line or "").strip()
+                line = sanitize_child_output(line or "").strip()
                 if not line:
                     continue
                 timestamp = parse_ffmpeg_time(line) if "time=" in line else None
@@ -1356,17 +1441,11 @@ class YouTubeDownloaderApp:
         self, video_path: str, audio_path: str, output_path: str, duration: Optional[float]
     ):
         ffmpeg_bin = self.env_status.ffmpeg_path or "ffmpeg"
-        cmd = [
-            ffmpeg_bin,
-            "-y",
-            "-i",
-            video_path,
-            "-i",
-            audio_path,
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a:0",
+        cmd = [ffmpeg_bin, "-y", "-i", video_path]
+        if video_path != audio_path:
+            cmd += ["-i", audio_path]
+        cmd += [
+            "-map", "0:v:0", "-map", "0:a:0" if video_path == audio_path else "1:a:0",
             "-c:v",
             "copy",
             "-c:a",
@@ -1383,9 +1462,9 @@ class YouTubeDownloaderApp:
             end_progress=95,
         )
 
-    def _create_staging_output(self, destination: str) -> str:
+    def _create_staging_output(self, destination: str, extension: str = ".mp4") -> str:
         os.makedirs(destination, exist_ok=True)
-        fd, path = tempfile.mkstemp(prefix=".unifi_dl_", suffix=".mp4", dir=destination)
+        fd, path = tempfile.mkstemp(prefix=".youtube_dl_", suffix=extension, dir=destination)
         os.close(fd)
         os.unlink(path)
         return path
@@ -1393,7 +1472,7 @@ class YouTubeDownloaderApp:
     def _finalize_output(self, staged_path: str, destination: str, base_name: str) -> str:
         """Publish a completed staged file without overwriting an existing output."""
         while True:
-            output_path = ensure_unique_path(destination, base_name)
+            output_path = ensure_unique_path(destination, base_name, Path(staged_path).suffix)
             try:
                 os.link(staged_path, output_path)
             except FileExistsError:
@@ -1420,17 +1499,32 @@ class YouTubeDownloaderApp:
         staged_path: Optional[str] = None
         self._last_output_warning = False
         try:
-            staged_path = self._create_staging_output(destination)
+            compatibility = bool(getattr(self, "unifi_compatible_var", False) and self.unifi_compatible_var.get())
+            source_video_codec = (video_fmt.get("vcodec") or "").lower()
+            source_audio_codec = (audio_fmt.get("acodec") or "").lower()
+            source_extension = (video_fmt.get("ext") or "").lower()
+            generic_mp4 = (
+                source_extension in GENERIC_CONTAINER_EXTENSIONS and
+                source_video_codec.startswith(("avc", "h264")) and
+                source_audio_codec.startswith(("mp4a", "aac")) and
+                source_extension in {"mp4", "m4v"}
+            )
+            staged_path = self._create_staging_output(destination, ".mp4" if (compatibility or generic_mp4) else ".mkv")
             duration = metadata.get("duration") or 0
-            if should_passthrough(video_fmt, audio_fmt):
-                self._append_log("Stream already meets Unifi requirements. Remuxing without re-encode.")
+            if not compatibility:
+                self._append_log("Combining selected streams without lossy re-encoding.")
+                self._set_stage("Combining streams (no re-encode)")
+                self._set_progress(70)
+                self._remux_passthrough(video_path, audio_path, staged_path, duration)
+            elif should_passthrough(video_fmt, audio_fmt):
+                self._append_log("Stream already meets UniFi compatibility requirements. Remuxing without re-encode.")
                 self._set_stage("Remuxing (no transcode needed)")
                 self._set_progress(70)
                 self._remux_passthrough(video_path, audio_path, staged_path, duration)
             else:
                 source_fps = video_fmt.get("fps") or metadata.get("fps") or metadata.get("average_fps")
                 target_fps = choose_target_fps(source_fps)
-                needs_fps_change = bool(source_fps) and round(source_fps) not in ALLOWED_FPS
+                needs_fps_change = not source_fps or round(source_fps) not in ALLOWED_FPS
 
                 video_codec = "h264_nvenc" if self.env_status.nvenc_available else "libx264"
                 encoder_note = "NVENC p4" if video_codec == "h264_nvenc" else "x264 medium"
@@ -1529,7 +1623,7 @@ class YouTubeDownloaderApp:
             self._last_output_warning = final_size > MAX_FILE_BYTES
             if self._last_output_warning:
                 self._append_log(
-                    f"Warning: Final file is {human_readable_size(final_size)}, which exceeds Unifi's 5 GB limit."
+                    f"Warning: Final file is {human_readable_size(final_size)}, which exceeds the UniFi compatibility 5 GB limit."
                 )
             else:
                 self._append_log(f"Final file size: {human_readable_size(final_size)}")
@@ -1543,7 +1637,7 @@ class YouTubeDownloaderApp:
         except Exception as exc:
             raise PipelineError(
                 "FFmpeg",
-                "Couldn't create a Unifi-ready MP4. Check the FFmpeg setup and available disk space, then try again.",
+                "Couldn't create the output file. Check the FFmpeg setup and available disk space, then try again.",
                 safe_error_detail(exc),
             ) from exc
         finally:

@@ -1,7 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="UnifiDownloader.App.MainWindow"
-        Title="Unifi Downloader"
+        Title="YouTube Downloader"
         Width="760"
         Height="900"
         MinWidth="560"
@@ -9,7 +9,7 @@
   <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
     <StackPanel Margin="28" Spacing="18">
       <StackPanel Spacing="4">
-        <TextBlock Text="Unifi Downloader" FontSize="28" FontWeight="SemiBold" />
+        <TextBlock Text="YouTube Downloader" FontSize="28" FontWeight="SemiBold" />
         <TextBlock Text="One video per run" Opacity="0.72" />
       </StackPanel>
 
@@ -43,21 +43,12 @@
                    AutomationProperties.HelpText="{Binding OutputControlsHelpText}"
                    IsEnabled="{Binding OutputControlsEnabled}"
                    Text="{Binding FileStem, Mode=TwoWay}" />
-          <TextBlock Text="Container" FontWeight="SemiBold" />
-          <ComboBox AutomationProperties.Name="Container" ItemsSource="{Binding Containers}"
-                    AutomationProperties.HelpText="{Binding OutputControlsHelpText}"
-                    SelectedItem="{Binding SelectedContainer, Mode=TwoWay}"
+          <CheckBox Content="Make output UniFi-compatible (MP4 / H.264 / AAC)"
+                    AutomationProperties.Name="Make output UniFi-compatible"
+                    AutomationProperties.HelpText="Off by default. When enabled, converts to the bounded UniFi MP4 compatibility profile."
+                    IsChecked="{Binding MakeUnifiCompatible, Mode=TwoWay}"
                     IsEnabled="{Binding OutputControlsEnabled}" />
-          <TextBlock Text="Frame rate target" FontWeight="SemiBold" />
-          <ComboBox Name="FrameRateBox" AutomationProperties.Name="Frame rate target"
-                    AutomationProperties.HelpText="{Binding FrameRateHelpText}"
-                    SelectedIndex="{Binding FrameRateSelectionIndex, Mode=TwoWay}"
-                    IsEnabled="{Binding OutputControlsEnabled}">
-            <ComboBoxItem Content="Preserve source" />
-            <ComboBoxItem Content="24 FPS" />
-            <ComboBoxItem Content="25 FPS" />
-            <ComboBoxItem Content="30 FPS" />
-          </ComboBox>
+          <TextBlock Text="Off: preserve the selected source codecs in a lossless Matroska container. On: use the bounded MP4 / H.264 / AAC compatibility profile." Opacity="0.72" TextWrapping="Wrap" />
           <TextBlock Text="Output settings are not used for metadata." Opacity="0.72" />
         </StackPanel>
       </GroupBox>
@@ -134,7 +125,7 @@
           <TextBlock Text="{Binding CompletionText}" TextWrapping="Wrap" />
           <TextBlock Text="{Binding ErrorMessage}" Foreground="OrangeRed" TextWrapping="Wrap" />
           <Button Content="Open in Browser" AutomationProperties.Name="Open in Browser"
-                  AutomationProperties.HelpText="Opens the verified local MP4 through the operating system handler."
+                  AutomationProperties.HelpText="Opens the verified local output through the operating system handler."
                   IsEnabled="{Binding CanOpenInBrowser}" Click="OpenInBrowserClicked" />
           <Button Content="Start New Run" AutomationProperties.Name="Start New Run"
                   AutomationProperties.HelpText="Resets terminal form and run-scoped session state."

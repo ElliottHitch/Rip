@@ -183,6 +183,32 @@ class PipelineTestCase(unittest.TestCase):
         self.assertTrue(FakeYoutubeDL.options_history)
         self.assertTrue(all("cookiesfrombrowser" not in options for options in FakeYoutubeDL.options_history))
 
+    def test_environment_probe_reports_ejs_and_deno_readiness_without_network(self):
+        with patch.object(app.importlib.util, "find_spec", return_value=object()), patch.object(
+            app.shutil,
+            "which",
+            side_effect=lambda name: {"deno": "/tools/deno", "ffmpeg": "/tools/ffmpeg", "ffprobe": "/tools/ffprobe"}.get(name),
+        ), patch.object(app.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="deno 2.3.1\n", stderr="")):
+            status = app.probe_environment()
+        self.assertTrue(status.ejs_available)
+        self.assertEqual(status.deno_path, "/tools/deno")
+        self.assertEqual(status.deno_version, "2.3.1")
+        self.assertTrue(status.deno_ready)
+        self.assertEqual(status.issues, [])
+
+        with patch.object(app.importlib.util, "find_spec", return_value=None), patch.object(
+            app.shutil, "which", side_effect=lambda name: "/tools/deno" if name == "deno" else None
+        ), patch.object(
+            app.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="deno 2.2.0\n", stderr="")
+        ):
+            missing = app.probe_environment()
+        self.assertFalse(missing.ejs_available)
+        self.assertEqual(missing.deno_path, "/tools/deno")
+        self.assertEqual(missing.deno_version, "2.2.0")
+        self.assertFalse(missing.deno_ready)
+        self.assertTrue(any("EJS" in issue for issue in missing.issues))
+        self.assertTrue(any("Deno" in issue for issue in missing.issues))
+
     def test_opt_in_browser_option_is_propagated_to_metadata_and_both_streams(self):
         self.downloader._active_browser_options = app.build_browser_session_options(
             "Chrome", "Profile With Spaces"
@@ -551,6 +577,7 @@ class PipelineTestCase(unittest.TestCase):
             self.downloader._run_pipeline("https://example.test/video", self.temp.name)
         self.downloader._reset_controls.assert_called_once_with(retry=True)
         self.assertIn("Error: bad URL", self.downloader._set_status.call_args_list[-1].args[0])
+        self.assertIn("Failed", [call.args[0] for call in getattr(self.downloader._set_stage, "call_args_list", [])])
 
     def test_cleanup_warning_preserves_completed_output_status(self):
         self.downloader.root = SimpleNamespace(after=lambda _delay, callback: callback())
@@ -642,7 +669,7 @@ class PipelineTestCase(unittest.TestCase):
 
     def test_output_is_staged_then_published_safely(self):
         self.downloader._execute_ffmpeg = Mock(side_effect=self._fake_ffmpeg)
-        existing = os.path.join(self.temp.name, "Unsafe Title.mp4")
+        existing = os.path.join(self.temp.name, "Unsafe Title.mkv")
         with open(existing, "wb") as output:
             output.write(b"existing")
         output = self.downloader._transcode_and_mux(
@@ -654,8 +681,33 @@ class PipelineTestCase(unittest.TestCase):
             {"vcodec": "none", "acodec": "opus", "abr": 128},
         )
         self.assertEqual(os.path.dirname(output), os.path.abspath(self.temp.name))
-        self.assertEqual(os.path.basename(output), "Unsafe Title (1).mp4")
-        self.assertEqual(sorted(os.listdir(self.temp.name)), ["Unsafe Title (1).mp4", "Unsafe Title.mp4"])
+        self.assertEqual(os.path.basename(output), "Unsafe Title (1).mkv")
+        self.assertEqual(sorted(os.listdir(self.temp.name)), ["Unsafe Title (1).mkv", "Unsafe Title.mkv"])
+
+    def test_unifi_compatibility_frame_rate_is_bounded_without_overriding_allowed_source(self):
+        setattr(self.downloader, "unifi_compatible_var", FakeVar(True))
+        for source_fps in (60, None):
+            with self.subTest(source_fps=source_fps):
+                self.downloader._execute_ffmpeg = Mock(side_effect=self._fake_ffmpeg)
+                self.downloader._transcode_and_mux(
+                    "video.webm",
+                    "audio.webm",
+                    {"title": "FPS", "duration": 1},
+                    self.temp.name,
+                    {"vcodec": "vp9", "acodec": "none", "fps": source_fps},
+                    {"vcodec": "none", "acodec": "opus", "abr": 128},
+                )
+                command = self.downloader._execute_ffmpeg.call_args.args[0]
+                self.assertIn(["-r", "30"], [command[index:index + 2] for index in range(len(command) - 1)])
+
+        self.downloader._execute_ffmpeg = Mock(side_effect=self._fake_ffmpeg)
+        self.downloader._transcode_and_mux(
+            "video.webm", "audio.webm", {"title": "Allowed FPS", "duration": 1}, self.temp.name,
+            {"vcodec": "vp9", "acodec": "none", "fps": 25},
+            {"vcodec": "none", "acodec": "opus", "abr": 128},
+        )
+        command = self.downloader._execute_ffmpeg.call_args.args[0]
+        self.assertNotIn("-r", command)
 
     def test_ffmpeg_failure_leaves_no_partial_output(self):
         def partial_failure(command, stage_label, duration, start_progress, end_progress):

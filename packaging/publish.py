@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a self-contained, unsigned Unifi Downloader directory artifact.
+"""Build a self-contained, unsigned YouTube Downloader directory artifact.
 
 The workflow deliberately packages only the .NET application. yt-dlp, Deno,
 FFmpeg, and FFprobe remain explicit local prerequisites and are never fetched.
@@ -182,7 +182,7 @@ def example_manifest(rid: str, tool_data: dict[str, dict]) -> dict:
 
 
 def sbom(version: str, rid: str, sdk: str, pins: dict[str, str]) -> dict:
-    packages = [{"SPDXID": "SPDXRef-Application", "name": "Unifi Downloader", "versionInfo": version, "downloadLocation": "NOASSERTION", "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION"}]
+    packages = [{"SPDXID": "SPDXRef-Application", "name": "YouTube Downloader", "versionInfo": version, "downloadLocation": "NOASSERTION", "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION"}]
     for name, package_version in sorted(pins.items()):
         packages.append({"SPDXID": "SPDXRef-" + re.sub(r"[^A-Za-z0-9.-]", "-", name), "name": name, "versionInfo": package_version, "downloadLocation": "NOASSERTION", "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION"})
     packages.append({"SPDXID": "SPDXRef-DotNet-SDK", "name": ".NET SDK", "versionInfo": sdk, "downloadLocation": "NOASSERTION", "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION"})
@@ -304,7 +304,7 @@ def publish(root: Path, rid: str, configuration: str) -> Path:
     dirty = bool(git_value(root, "status", "--porcelain", "--untracked-files=no", fallback=""))
     provenance = {
         "schemaVersion": 1,
-        "application": {"name": "Unifi Downloader", "version": version, "targetRid": rid, "artifactType": "self-contained-directory", "sourceRevision": revision, "sourceDirty": dirty, "sourceTreeDigest": source_tree_digest(root)},
+        "application": {"name": "YouTube Downloader", "version": version, "targetRid": rid, "artifactType": "self-contained-directory", "sourceRevision": revision, "sourceDirty": dirty, "sourceTreeDigest": source_tree_digest(root)},
         "build": {"sdkVersion": sdk, "dependencyPins": pins, "configuration": configuration, "restore": "locked", "selfContained": True, "publishSingleFile": False, "sourceDateEpoch": 0, "commandIntent": "dotnet publish --configuration Release --runtime <rid> --self-contained true --no-restore"},
         "tools": tools,
         "toolManifestSource": "packaging/tool-provenance.json",

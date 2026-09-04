@@ -87,6 +87,9 @@ public sealed record SafeDownloadError
 
 public static partial class ErrorRedactor
 {
+    [GeneratedRegex(@"\x1B(?:\[[0-?]*[ -/]*[@-~]|\].*?(?:\x07|\x1B\\))", RegexOptions.CultureInvariant)]
+    private static partial Regex Ansi();
+
     [GeneratedRegex(@"https?://[^\s]+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Url();
 
@@ -105,7 +108,9 @@ public static partial class ErrorRedactor
     public static string Redact(string message)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        var safe = Url().Replace(message, "[redacted-url]");
+        var safe = Ansi().Replace(message, string.Empty);
+        safe = new string(safe.Where(static character => !char.IsControl(character) || character is '\n' or '\r' or '\t').ToArray());
+        safe = Url().Replace(safe, "[redacted-url]");
         safe = AuthorizationAssignment().Replace(safe, "[redacted-sensitive-value]");
         safe = SensitiveAssignment().Replace(safe, "[redacted-sensitive-value]");
         safe = WindowsPath().Replace(safe, "[redacted-path]");

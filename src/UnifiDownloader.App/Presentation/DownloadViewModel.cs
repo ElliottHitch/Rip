@@ -39,8 +39,9 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
     private DownloadOperation selectedOperation = DownloadOperation.Video;
     private string outputFolder = string.Empty;
     private string fileStem = "download";
-    private OutputContainer selectedContainer = OutputContainer.UnifiMp4;
+    private OutputContainer selectedContainer = OutputContainer.Matroska;
     private double? frameRateTarget;
+    private bool makeUnifiCompatible;
     private bool useBrowserSession;
     private BrowserKind? selectedBrowser;
     private bool isBusy;
@@ -70,6 +71,8 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
     public string FileStem { get => fileStem; set { if (Set(ref fileStem, value ?? string.Empty)) NotifyFormChanged(); } }
     public OutputContainer SelectedContainer { get => selectedContainer; set { if (Set(ref selectedContainer, value)) NotifyFormChanged(); } }
     public double? FrameRateTarget { get => frameRateTarget; set { if (Set(ref frameRateTarget, value)) NotifyFormChanged(); } }
+    /// <summary>The only user-facing output policy switch; it is deliberately off by default.</summary>
+    public bool MakeUnifiCompatible { get => makeUnifiCompatible; set { if (Set(ref makeUnifiCompatible, value)) NotifyFormChanged(); } }
     public bool UseBrowserSession { get => useBrowserSession; set { if (Set(ref useBrowserSession, value)) { if (!value) SelectedBrowser = null; NotifyFormChanged(); } } }
     public BrowserKind? SelectedBrowser { get => selectedBrowser; set { if (Set(ref selectedBrowser, value)) NotifyFormChanged(); } }
 
@@ -202,7 +205,13 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
         {
             var output = SelectedOperation == DownloadOperation.Metadata
                 ? new OutputOptions("metadata", "metadata", OutputContainer.Mp4)
-                : new OutputOptions(OutputFolder.Trim(), FileStem.Trim(), SelectedContainer, false, FrameRateTarget);
+                : new OutputOptions(
+                    OutputFolder.Trim(),
+                    FileStem.Trim(),
+                    MakeUnifiCompatible ? OutputContainer.UnifiMp4 : SelectedContainer,
+                    false,
+                    FrameRateTarget,
+                    MakeUnifiCompatible);
             request = new DownloadRequest(
                 new VideoReference(address),
                 SelectedOperation,
@@ -351,8 +360,9 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
         OutputFolder = string.Empty;
         FileStem = "download";
         SelectedOperation = DownloadOperation.Video;
-        SelectedContainer = OutputContainer.UnifiMp4;
+        SelectedContainer = OutputContainer.Matroska;
         FrameRateTarget = null;
+        MakeUnifiCompatible = false;
         UseBrowserSession = false;
         SelectedBrowser = null;
         IsBusy = false;

@@ -57,6 +57,29 @@ public sealed class PolicyTests
         Assert.False(decision.RequiresConversion);
     }
 
+    [Theory]
+    [InlineData(24d)]
+    [InlineData(25d)]
+    [InlineData(30d)]
+    public void Unifi_frame_rate_policy_preserves_allowed_source_rates(double sourceFrameRate)
+    {
+        var decision = FrameRatePolicy.Decide(sourceFrameRate, null, unifiCompatible: true);
+
+        Assert.Equal(sourceFrameRate, decision.EffectiveFrameRate);
+        Assert.False(decision.RequiresConversion);
+    }
+
+    [Theory]
+    [InlineData(60d)]
+    [InlineData(null)]
+    public void Unifi_frame_rate_policy_converts_unsupported_or_unknown_source_to_30(double? sourceFrameRate)
+    {
+        var decision = FrameRatePolicy.Decide(sourceFrameRate, null, unifiCompatible: true);
+
+        Assert.Equal(30d, decision.EffectiveFrameRate);
+        Assert.True(decision.RequiresConversion);
+    }
+
     [Fact]
     public void Frame_rate_policy_converts_to_explicit_target_when_source_is_unknown()
     {

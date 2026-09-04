@@ -316,8 +316,20 @@ public sealed class BoundedProcessExecutor : IProcessExecutor
             return SafeInfrastructureErrors.StructuredProcessFailure(structured);
         }
 
+        // yt-dlp's normal human-readable stderr is untrusted but status codes are stable.
+        // Classify them here so the application can apply its single stream-refresh policy.
+        if (ContainsHttpStatus(result.StandardError, 403) || ContainsHttpStatus(result.StandardOutput, 403))
+            return SafeInfrastructureErrors.StructuredProcessFailure("access-denied");
+        if (ContainsHttpStatus(result.StandardError, 429) || ContainsHttpStatus(result.StandardOutput, 429))
+            return SafeInfrastructureErrors.StructuredProcessFailure("rate-limited");
+
         return SafeInfrastructureErrors.ProcessExitedNonzero();
     }
+
+    private static bool ContainsHttpStatus(string output, int statusCode) =>
+        output.Contains($"HTTP Error {statusCode}", StringComparison.OrdinalIgnoreCase) ||
+        output.Contains($"HTTP {statusCode}", StringComparison.OrdinalIgnoreCase) ||
+        output.Contains($"Error {statusCode}", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryReadStructuredFailure(string output, out string code)
     {

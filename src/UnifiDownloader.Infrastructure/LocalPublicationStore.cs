@@ -117,15 +117,15 @@ public sealed class StagedArtifactRegistry
         !string.IsNullOrWhiteSpace(artifact.StagingKey) &&
         artifact.StagingKey.Length <= MaximumKeyLength &&
         artifact.StagingKey.All(static c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.') &&
-        IsSafeMp4Name(artifact.FileName) &&
+        IsSafeOutputName(artifact.FileName, artifact.Container) &&
         Enum.IsDefined(artifact.Container) &&
         artifact.LengthBytes > 0 && artifact.Verified;
 
-    private static bool IsSafeMp4Name(string? fileName) =>
+    private static bool IsSafeOutputName(string? fileName, OutputContainer container) =>
         !string.IsNullOrWhiteSpace(fileName) &&
         fileName.Length <= 255 &&
-        fileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) &&
-        fileName is not ".mp4" and not "." and not ".." &&
+        fileName.EndsWith(container == OutputContainer.Matroska ? ".mkv" : ".mp4", StringComparison.OrdinalIgnoreCase) &&
+        fileName is not (".mp4" or ".mkv" or "." or "..") &&
         fileName.All(static c => !char.IsControl(c) && c is not '/' and not '\\' and not ':' and not '?' and not '#');
 
     private static bool TryGetRegularDirectory(string? candidate, out string normalized)
@@ -433,7 +433,8 @@ public sealed class LocalPublicationStore : IPublicationStore
         string stem;
         try { stem = SafeFileNamePolicy.Normalize(output.FileStem); }
         catch (ArgumentException) { return false; }
-        finalPath = Path.Combine(destination, stem + ".mp4");
+        var extension = artifact.Container == OutputContainer.Matroska ? ".mkv" : ".mp4";
+        finalPath = Path.Combine(destination, stem + extension);
         return IsWithin(destination, finalPath);
     }
 

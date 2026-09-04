@@ -249,7 +249,7 @@ public sealed class LocalStreamStagingTests
         new DownloadRequest(
             new VideoReference(new Uri("https://video.example.test/watch")),
             video ? DownloadOperation.Video : DownloadOperation.Audio,
-            new OutputOptions("/tmp/final-destination", "user-file"),
+            new OutputOptions("/tmp/final-destination", "user-file", OutputContainer.UnifiMp4),
             BrowserSessionSelection.Create(BrowserKind.Chrome)),
         new MediaCharacteristics(OutputContainer.Mp4, VideoCodec.Av1, AudioCodec.Aac, video, audio, 30),
         video ? new MediaSource(new Uri("https://media.example.test/video")) : null,

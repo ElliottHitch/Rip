@@ -16,6 +16,8 @@ public class LocalStreamStager : ILocalStreamStager
     private const int MaximumAllocationAttempts = 8;
 
     private readonly HttpClient httpClient;
+    private readonly BoundedProcessExecutor? ytDlpExecutor;
+    private readonly string? knownLocalDenoPath;
     private readonly string stageRootCandidate;
     private readonly long maximumResponseBytes;
     private readonly object gate = new();
@@ -34,6 +36,23 @@ public class LocalStreamStager : ILocalStreamStager
         this.maximumResponseBytes = maximumResponseBytes;
     }
 
+    /// <summary>Production path: let pinned yt-dlp own signed-stream requests.</summary>
+    public LocalStreamStager(
+        BoundedProcessExecutor executor,
+        string knownLocalDenoPath,
+        string stageRoot,
+        long maximumResponseBytes = DefaultMaximumResponseBytes)
+    {
+        ytDlpExecutor = executor ?? throw new ArgumentNullException(nameof(executor));
+        if (string.IsNullOrWhiteSpace(knownLocalDenoPath) || !Path.IsPathFullyQualified(knownLocalDenoPath))
+            throw new ArgumentException("The JavaScript runtime path must be an absolute local path.", nameof(knownLocalDenoPath));
+        this.knownLocalDenoPath = knownLocalDenoPath;
+        httpClient = null!;
+        stageRootCandidate = stageRoot ?? throw new ArgumentNullException(nameof(stageRoot));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumResponseBytes);
+        this.maximumResponseBytes = maximumResponseBytes;
+    }
+
     public LocalStreamStager(
         string stageRoot,
         HttpClient httpClient,
@@ -47,7 +66,22 @@ public class LocalStreamStager : ILocalStreamStager
         CancellationToken cancellationToken)
     {
         var stageRoot = GetValidatedStageRoot();
-        if (stageRoot is null || !TryValidatePlan(plan, out var sources))
+        if (stageRoot is null || plan is null)
+        {
+            return Failure<LocalMediaInputs>(SafeInfrastructureErrors.InvalidLocalStreamRequest());
+        }
+
+        var sources = new List<(LocalMediaChannel Channel, MediaSource Source)>();
+        if (plan.IsProgressive)
+        {
+            if (!plan.Characteristics.HasVideo || !plan.Characteristics.HasAudio || plan.VideoSource is null || plan.AudioSource is not null ||
+                !IsHttpSource(plan.VideoSource))
+            {
+                return Failure<LocalMediaInputs>(SafeInfrastructureErrors.InvalidLocalStreamRequest());
+            }
+            sources.Add((LocalMediaChannel.Video, plan.VideoSource));
+        }
+        else if (!TryValidatePlan(plan, out sources))
         {
             return Failure<LocalMediaInputs>(SafeInfrastructureErrors.InvalidLocalStreamRequest());
         }
@@ -60,7 +94,7 @@ public class LocalStreamStager : ILocalStreamStager
             foreach (var source in sources)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var staged = await StageOneAsync(source.Channel, source.Source, stageRoot, cancellationToken)
+                var staged = await StageOneAsync(plan, source.Channel, source.Source, stageRoot, cancellationToken)
                     .ConfigureAwait(false);
                 if (!staged.IsSuccess)
                 {
@@ -226,6 +260,7 @@ public class LocalStreamStager : ILocalStreamStager
     }
 
     private async ValueTask<StageOneResult> StageOneAsync(
+        MediaPlan plan,
         LocalMediaChannel channel,
         MediaSource source,
         string stageRoot,
@@ -238,6 +273,11 @@ public class LocalStreamStager : ILocalStreamStager
 
         try
         {
+            if (ytDlpExecutor is not null)
+            {
+                return await StageWithYtDlpAsync(plan, channel, path, stageRoot, cancellationToken).ConfigureAwait(false);
+            }
+
             using var request = new HttpRequestMessage(HttpMethod.Get, source.Address);
             using var response = await httpClient.SendAsync(
                 request,
@@ -323,6 +363,69 @@ public class LocalStreamStager : ILocalStreamStager
             TryDeleteFile(path);
             return StageOneResult.Failure(SafeInfrastructureErrors.InvalidLocalStreamRequest());
         }
+    }
+
+    private async ValueTask<StageOneResult> StageWithYtDlpAsync(
+        MediaPlan plan,
+        LocalMediaChannel channel,
+        string path,
+        string stageRoot,
+        CancellationToken cancellationToken)
+    {
+        var formatId = plan.IsProgressive || channel == LocalMediaChannel.Video
+            ? plan.VideoFormatId
+            : plan.AudioFormatId;
+        if (string.IsNullOrWhiteSpace(formatId))
+        {
+            TryDeleteFile(path);
+            return StageOneResult.Failure(SafeInfrastructureErrors.InvalidLocalStreamRequest());
+        }
+
+        var operation = new List<string>
+        {
+            "--format", formatId,
+            "--output", path,
+            "--no-playlist",
+            "--no-part",
+            "--retries", "1",
+            "--fragment-retries", "1",
+            "--socket-timeout", "30"
+        };
+        if (plan.Request.BrowserSession is { } browser)
+        {
+            operation.Add("--cookies-from-browser");
+            operation.Add(browser.Kind switch
+            {
+                BrowserKind.Chromium => "chromium",
+                BrowserKind.Chrome => "chrome",
+                BrowserKind.Edge => "edge",
+                BrowserKind.Firefox => "firefox",
+                _ => throw new ArgumentOutOfRangeException(nameof(plan))
+            });
+        }
+        operation.Add(plan.Request.Video.Address.AbsoluteUri);
+        var arguments = YtDlpInvocationPolicy.Build(knownLocalDenoPath!, operation);
+        var result = await ytDlpExecutor!.ExecuteCapturedAsync(
+            new ProcessSpec(ToolKey.YtDlp.ToString(), arguments, TimeSpan.FromMinutes(2)),
+            cancellationToken).ConfigureAwait(false);
+        if (result.Error is not null)
+        {
+            TryDeleteFile(path);
+            return StageOneResult.Failure(result.Error);
+        }
+        if (result.Value!.ExitCode != 0)
+        {
+            TryDeleteFile(path);
+            return StageOneResult.Failure(BoundedProcessExecutor.ClassifyNonzeroExit(result.Value));
+        }
+        if (!IsVerifiedRegularFileBelowRoot(path, stageRoot, out var lengthBytes) || lengthBytes > maximumResponseBytes)
+        {
+            TryDeleteFile(path);
+            return StageOneResult.Failure(SafeInfrastructureErrors.LocalStreamEmpty());
+        }
+        return StageOneResult.Success(
+            new LocalMediaInputHandle("input-" + Guid.NewGuid().ToString("N"), channel, lengthBytes, verified: true),
+            path);
     }
 
     private string? GetValidatedStageRoot()

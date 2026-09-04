@@ -163,8 +163,8 @@ public sealed class DownloadApplicationServiceTests
         Assert.Same(browser, ports.Provider.MetadataBrowser);
         Assert.Same(browser, ports.Provider.ResolveRequest!.BrowserSession);
         Assert.Equal(DownloadOperation.Audio, ports.Provider.ResolveRequest.Operation);
-        Assert.Null(ports.Stager.Plan!.Request.BrowserSession);
-        Assert.Null(ports.Processor.Plan!.Request.BrowserSession);
+        Assert.Same(browser, ports.Stager.Plan!.Request.BrowserSession);
+        Assert.Same(browser, ports.Processor.Plan!.Request.BrowserSession);
         Assert.Equal(LocalMediaChannel.Audio, ports.Stager.Inputs!.Audio!.Channel);
         Assert.Null(ports.Stager.Inputs.Video);
     }
@@ -319,7 +319,7 @@ public sealed class DownloadApplicationServiceTests
             Request = new DownloadRequest(
                 new VideoReference(new Uri("https://video.test/watch?id=opaque")),
                 operation,
-                new OutputOptions("output", "video"),
+                new OutputOptions("output", "video", OutputContainer.UnifiMp4),
                 BrowserSessionSelection.Create(BrowserKind.Chrome));
             Provider = new FakeProvider(this);
             Stager = new FakeStager(this);

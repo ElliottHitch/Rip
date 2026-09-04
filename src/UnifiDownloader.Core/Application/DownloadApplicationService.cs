@@ -290,12 +290,9 @@ public sealed class DownloadApplicationService
                 sequence).ConfigureAwait(false);
         }
 
-        // Browser selection is provider-only. The provider may use it while resolving, but
-        // downstream ports receive a run plan with the selection removed.
-        var executionPlan = planResult.Value with
-        {
-            Request = planResult.Value.Request with { BrowserSession = null }
-        };
+        // The typed browser selection remains available to the local yt-dlp staging adapter.
+        // It contains only a browser kind, never cookies or profile paths.
+        var executionPlan = planResult.Value;
 
         await ProgressAsync(run, DownloadStage.Downloading, sequence).ConfigureAwait(false);
         if (cancellationToken.IsCancellationRequested)
@@ -305,24 +302,51 @@ public sealed class DownloadApplicationService
         }
 
         ProviderResult<LocalMediaInputs> stageResult;
-        try
+        var streamRefreshAttempts = 0;
+        while (true)
         {
-            stageResult = await stager.StageAsync(executionPlan, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return await CancelAsync(run, DownloadStage.Downloading, metadata, cleanupComplete: true, sequence)
-                .ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-            return await FailAsync(
-                run,
-                DownloadStage.Downloading,
-                SafeDownloadErrors.Unexpected(DownloadStage.Downloading),
-                metadata,
-                cleanupComplete: true,
-                sequence).ConfigureAwait(false);
+            try
+            {
+                stageResult = await stager.StageAsync(executionPlan, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return await CancelAsync(run, DownloadStage.Downloading, metadata, cleanupComplete: true, sequence)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                return await FailAsync(
+                    run,
+                    DownloadStage.Downloading,
+                    SafeDownloadErrors.Unexpected(DownloadStage.Downloading),
+                    metadata,
+                    cleanupComplete: true,
+                    sequence).ConfigureAwait(false);
+            }
+
+            if (stageResult.Error is null ||
+                !RetryPolicy.Decide(new(
+                    stageResult.Error.Code,
+                    DownloadStage.Downloading,
+                    streamRefreshAttempts)).ShouldRetry)
+            {
+                break;
+            }
+
+            streamRefreshAttempts++;
+            await ProgressAsync(run, DownloadStage.Resolving, sequence).ConfigureAwait(false);
+            var refreshed = await provider.ResolveMediaAsync(request, metadata, cancellationToken).ConfigureAwait(false);
+            if (refreshed.Error is not null || refreshed.Value is null)
+            {
+                stageResult = refreshed.Error is not null
+                    ? new ProviderResult<LocalMediaInputs>(null, refreshed.Error)
+                    : new ProviderResult<LocalMediaInputs>(null, SafeDownloadErrors.Unexpected(DownloadStage.Resolving));
+                break;
+            }
+
+            executionPlan = refreshed.Value;
+            await ProgressAsync(run, DownloadStage.Downloading, sequence).ConfigureAwait(false);
         }
 
         if (stageResult.Error is not null)
@@ -611,7 +635,10 @@ public sealed class DownloadApplicationService
         try
         {
             // FrameRatePolicy is the sole authority for the bounded, typed target contract.
-            _ = FrameRatePolicy.Decide(sourceFrameRate: null, requestedFrameRate: request.Output.FrameRateTarget);
+            _ = FrameRatePolicy.Decide(
+                sourceFrameRate: null,
+                requestedFrameRate: request.Output.FrameRateTarget,
+                unifiCompatible: request.Output.UnifiCompatible);
             return true;
         }
         catch (ArgumentOutOfRangeException)
@@ -622,9 +649,17 @@ public sealed class DownloadApplicationService
 
     private static bool IsValidStagedInputs(MediaPlan? plan, LocalMediaInputs? inputs)
     {
-        if (plan is null || inputs is null || plan.Request is null || plan.Characteristics is null)
+        if (inputs is null || plan is null || plan.Request is null || plan.Characteristics is null)
         {
             return false;
+        }
+
+        if (plan.IsProgressive)
+        {
+            return plan.Characteristics.HasVideo && plan.Characteristics.HasAudio &&
+                plan.VideoSource is not null && plan.AudioSource is null &&
+                inputs.Video is { Channel: LocalMediaChannel.Video, Verified: true, LengthBytes: > 0 } &&
+                inputs.Audio is null;
         }
 
         var handles = new List<LocalMediaInputHandle>(2);
@@ -702,7 +737,7 @@ public sealed class DownloadApplicationService
         new(
             SafeOpaqueIdentifier(source.StagingKey, "stage-result"),
             SafeFileName(source.FileName),
-            source.Container is OutputContainer.Mp4 or OutputContainer.UnifiMp4 ? source.Container : OutputContainer.Mp4,
+            source.Container is OutputContainer.Mp4 or OutputContainer.UnifiMp4 or OutputContainer.Matroska ? source.Container : OutputContainer.Mp4,
             source.LengthBytes > 0 ? source.LengthBytes : 1,
             source.Verified);
 

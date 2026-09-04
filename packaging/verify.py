@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify an unpacked Unifi Downloader package without contacting a provider."""
+"""Verify an unpacked YouTube Downloader package without contacting a provider."""
 from __future__ import annotations
 
 import hashlib

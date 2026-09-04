@@ -79,9 +79,9 @@ public sealed class YtDlpVideoProviderTests
 
         Assert.True(video.IsSuccess);
         Assert.Equal("https://cdn.example.invalid/video-high.mp4", video.Value!.VideoSource!.Address.AbsoluteUri);
-        Assert.Null(video.Value.AudioSource);
+        Assert.Equal("https://cdn.example.invalid/audio-high.m4a", video.Value.AudioSource!.Address.AbsoluteUri);
         Assert.True(video.Value.Characteristics.HasVideo);
-        Assert.False(video.Value.Characteristics.HasAudio);
+        Assert.True(video.Value.Characteristics.HasAudio);
         Assert.Equal(VideoCodec.H264, video.Value.Characteristics.VideoCodec);
         Assert.True(audio.IsSuccess);
         Assert.Equal("https://cdn.example.invalid/audio-high.m4a", audio.Value!.AudioSource!.Address.AbsoluteUri);
