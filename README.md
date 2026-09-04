@@ -1,4 +1,4 @@
-# YouTube downloader for Unifi Connect
+# YouTube Downloader
 
 This repository is migrating from the preserved Python/Tkinter launcher to a .NET 10 desktop application with an Avalonia shell. The target entry point is `src/UnifiDownloader.App`, a single-window shell over typed Core and Infrastructure boundaries. The shell gate is implemented and deterministic tests pass, but platform, packaging, live-media, and release gates remain open. It is not a release artifact.
 
@@ -34,7 +34,7 @@ When both selected streams already meet the app's checks, it remuxes them withou
 
 ## Pipeline overview
 
-![Six-stage downloader pipeline from a single-video URL through metadata and format resolution, one bounded 403 refresh, separate video and audio downloads, remux or transcode, and non-overwriting publication of a verified MP4. HTTP 429 is not automatically re-resolved; failed recovery ends with Try Again and does not bypass service restrictions.](docs/assets/pipeline/downloader-pipeline.svg)
+![Six-stage downloader pipeline from a single-video URL through metadata and format resolution, one bounded 403 refresh, separate video and audio downloads, remux or transcode, and non-overwriting publication of a verified media output. HTTP 429 is not automatically re-resolved; failed recovery ends with Try Again and does not bypass service restrictions.](docs/assets/pipeline/downloader-pipeline.svg)
 
 If the SVG is unavailable, the same flow is:
 
@@ -104,7 +104,7 @@ Browser-session availability depends on the installed browser, OS permissions, p
 These are separate actions. `Open in Browser` is post-download only.
 
 - Browser-session access affects yt-dlp metadata and stream requests only after explicit consent. It is not a bot-detection workaround or a guarantee of access.
-- `Open in Browser` runs only after a non-empty final MP4 has been published and verified. It sends an encoded local `file://` URI to the default browser and makes no YouTube request. It does not retry a download, repair a failed metadata request, solve bot detection, or change the access/session setting.
+- `Open in Browser` runs only after a non-empty final media file has been published and verified. The file is normally Matroska in generic mode or MP4 in UniFi compatibility mode. The action sends an encoded local `file://` URI to the default browser and makes no YouTube request. It does not retry a download, repair a failed metadata request, solve bot detection, or change the access/session setting.
 
 On headless systems or systems without a default file handler, opening may fail. The shell reports a safe opener failure without exposing the URI or full path. If the completed file has been moved or deleted, the action is disabled after the local verification gate fails. A completed file over 5 GB remains eligible for Open in Browser while retaining the existing Unifi-compliance warning.
 
@@ -217,6 +217,6 @@ The generated PNG is an inspection artifact and is not part of the repository.
 - The current target media adapter uses CPU x264. NVENC and other GPU paths are not qualified by the shell gate.
 - Unknown source duration or stream size produces indeterminate progress rather than a fabricated percentage.
 - The 5 GB warning is based on the final file size. The app does not prevent a file from exceeding the limit.
-- Publication rejects an existing destination without overwriting it or adding a collision suffix. It copies the owned source to a private temporary file in the selected destination, verifies the copied length, commits with a same-directory non-overwriting rename, and re-verifies the final MP4. Cleanup is best effort; a post-commit cleanup warning preserves the verified output.
+- Publication rejects an existing destination without overwriting it or adding a collision suffix. It copies the owned source to a private temporary file in the selected destination, verifies the copied length, commits with a same-directory non-overwriting rename, and re-verifies the final media file. Cleanup is best effort; a post-commit cleanup warning preserves the verified output.
 - The verified local contract does not claim whole-operation atomicity, hard-link support, or universal filesystem/platform behavior. Check-then-use races and later platform/opener qualification remain release gates.
 - No real-media or live-service download is part of the deterministic test gate.

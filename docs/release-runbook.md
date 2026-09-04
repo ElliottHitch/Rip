@@ -4,7 +4,7 @@ Status: release preparation only. The current repository has deterministic local
 
 Scope and safety
 
-Use the downloader only for media you are authorized to access, download, and use. The product does not collect or export credentials or cookies, automate login or CAPTCHA, bypass access or service restrictions, rotate proxies, spoof fingerprints or headers, or automatically hammer rate-limited services. Browser-session access is a separate, explicit per-run opt-in. `Open in Browser` opens only a freshly verified local MP4 and does not contact the provider.
+Use the downloader only for media you are authorized to access, download, and use. The product does not collect or export credentials or cookies, automate login or CAPTCHA, bypass access or service restrictions, rotate proxies, spoof fingerprints or headers, or automatically hammer rate-limited services. Browser-session access is a separate, explicit per-run opt-in. `Open in Browser` opens only a freshly verified local media file and does not contact the provider.
 
 Evidence lanes
 
@@ -84,7 +84,7 @@ For each declared row, use a native desktop host and a clean test account or wor
 1. The app starts from a path containing spaces and reports missing tools without attempting work when no valid manifest exists.
 2. A valid target-RID manifest enables `Test Environment` only after all four tools and Runtime report `Available`.
 3. The folder picker opens after the window is ready, allows one folder, safely returns a local path, and leaves the output field editable. Cancellation or unsupported URI schemes leave the field unchanged and show the safe fallback text.
-4. A permitted local or controlled test run publishes a non-empty MP4 without overwriting an existing destination. A collision reports a conflict and does not create a numbered suffix.
+4. A permitted local or controlled test run publishes a non-empty Matroska file in generic mode or MP4 in UniFi compatibility mode without overwriting an existing destination. A collision reports a conflict and does not create a numbered suffix.
 5. Cancellation, FFmpeg failure, missing permissions, long paths, and low disk space do not produce a false completion. A post-commit cleanup warning preserves the verified output.
 6. `Open in Browser` is enabled only for the verified published output, rechecks the file, and uses the operating system's default handler. Verify a missing or moved file and a missing handler without exposing the URI or full path.
 7. Keyboard traversal, focus, status announcements, minimum size, scaling, and the agreed screen-reader tier pass. Windows UI Automation and Linux AT-SPI2 are evidence gates, not assumptions from Avalonia documentation.

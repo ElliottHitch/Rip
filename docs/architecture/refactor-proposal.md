@@ -27,7 +27,7 @@ The recommendation preserves the product/security contract: one YouTube video pe
 
 ### Current implementation status
 
-The Phase 2 shell now exists in `src/UnifiDownloader.App`. `Program.Main` starts the Avalonia desktop lifetime for ordinary launches, while `--deterministic-smoke` exits before Avalonia and Infrastructure initialization. The shell has one window with Request, Output, Browser session, Environment, Run controls, Activity, Completion, and status regions. Its typed form supports `Metadata`, `Video`, and `Audio`, `Preserve source`, `24 FPS`, `25 FPS`, and `30 FPS`, default-off per-run browser consent for `Chromium`, `Chrome`, `Edge`, or `Firefox`, safe terminal states, and a separate verified-local-MP4 `Open in Browser` action.
+The Phase 2 shell now exists in `src/UnifiDownloader.App`. `Program.Main` starts the Avalonia desktop lifetime for ordinary launches, while `--deterministic-smoke` exits before Avalonia and Infrastructure initialization. The shell has one window with Request, Output, Browser session, Environment, Run controls, Activity, Completion, and status regions. Its typed form supports `Metadata`, `Video`, and `Audio`, one off-by-default `Make output UniFi-compatible` toggle for video runs, default-off per-run browser consent for `Chromium`, `Chrome`, `Edge`, or `Firefox`, safe terminal states, and a separate verified-local-media `Open in Browser` action.
 
 The current App composition loads `unifi-downloader.tools.json` from beside the application binary, or from `UNIFI_DOWNLOADER_TOOL_MANIFEST` when set. The manifest requires schema version 1, HTTPS allow-listed repositories, separate trusted expectations, verified SHA-256 values, and a matching execution RID. Missing or invalid configuration reports safe unavailable capability results and keeps Start disabled. The shell does not download or discover tools remotely. The current `Choose Output Folder` action is wired through Avalonia's `StorageProvider` after `Window.Opened`; it allows one folder and returns only a safe local filesystem path, while the editable output field remains the fallback. The shell gate does not claim live provider or media success, native controls, ARM64 or native Wayland support, packaging, signing, updates, rollback exercise, or release readiness. See [the implementation handoff](phase2-app-shell-implementation.md) and [the tool manifest guide](../tool-manifest.md) for the exact boundary and deferred gates.
 
@@ -143,7 +143,7 @@ These are compatibility requirements, not optional implementation details. Any i
 - Cancellation is truthful: failed/cancelled work is not presented as complete; cancellation after publication preserves and reports the output; cleanup failure is a warning, not a false failure.
 - Browser-session access is off by default, consent-gated per download, uses only yt-dlp's supported local `--cookies-from-browser` option, locks while running, and clears consent, browser, profile, and option state after success, failure, or cancellation.
 - The app never asks for a password, automates login or CAPTCHA, exports or writes cookie files, persists/uploads browser data, runs a remote bridge, rotates proxies, spoofs fingerprints/headers, or bypasses service restrictions.
-- Browser-session access and local post-download opening are separate ports and separate UI permissions. Opening a verified local MP4 never calls yt-dlp, network, browser-session, or retry code.
+- Browser-session access and local post-download opening are separate ports and separate UI permissions. Opening a verified local media file never calls yt-dlp, network, browser-session, or retry code.
 - Logs, status, dialogs, retained errors, exception causes/contexts, traceback locals, and future diagnostics must not retain cookies, profile paths, signed URLs, tokens, authorization values, or raw upstream browser diagnostics.
 
 ## 5. Recommended target architecture (approved selection)
@@ -187,7 +187,7 @@ src/UnifiDownloader.Infrastructure/
     FfmpegProcessAdapter.cs     // argv, output reader, cancellation, exit classification
     FilesystemPublisher.cs      // temp, staging, verification, collision-safe publication
     BrowserSessionAdapter.cs    // consent and supported cookies-from-browser argument
-    LocalFileOpener.cs          // verified local MP4 only
+    LocalFileOpener.cs          // verified local media only
     EnvironmentDiagnostics.cs   // PATH/runtime/process capability checks
     RedactedObserver.cs         // safe event/log sink
 src/UnifiDownloader.App/
@@ -575,7 +575,7 @@ The durable decision records are [ADR-0001](decisions/0001-target-stack.md), [AD
 | Packaging | Per-target self-contained .NET artifacts; Windows ZIP/onedir and Linux tar.gz first | Approved initial shape; exact artifact evidence/signing remain release gates |
 | Updates | No automatic update until signing, rollback, and support policy are proven | Deferred |
 | Browser/session privacy | Default-off, explicit consent, in-memory, no-export/no-persistence boundary | Non-negotiable |
-| Local opening | Separate verified-local-MP4 opener; no session/network coupling | Non-negotiable |
+| Local opening | Separate verified-local-media opener; no session/network coupling | Non-negotiable |
 | Support | Windows 10/11 x64 and Linux x64 Ubuntu/Debian-family X11/XWayland; others separately qualified | Approved initial tier; evidence gate |
 | Legacy removal | Only after replacement default, gates pass, rollback exercised, docs ready, and owner sign-off | Explicit future gate |
 

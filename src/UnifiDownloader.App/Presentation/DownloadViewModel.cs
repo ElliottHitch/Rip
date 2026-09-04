@@ -381,7 +381,7 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
     }
     internal void SetOpenResult(OpenResult result)
     {
-        StatusText = result.Opened ? "Opened verified local MP4" : "The verified local MP4 could not be opened by the operating system.";
+        StatusText = result.Opened ? "Opened verified local media file" : "The verified local media file could not be opened by the operating system.";
         Announcement = StatusText;
         Notify(nameof(StatusText), nameof(Announcement));
     }

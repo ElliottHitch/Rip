@@ -110,7 +110,7 @@ Completion exposes:
 
 - a safe output summary, such as a sanitized file name and size category or size value supplied by the application contract,
 - `Open Folder` only when the application has a valid published local result and the action's separate file-system conditions are satisfied,
-- `Open in Browser` only under the local-MP4 gate in section 7,
+- `Open in Browser` only under the local-media gate in section 7,
 - `Start New Run` after terminal reset handling.
 
 The completion region never treats a staged artifact, an unverified artifact, a cancelled run, or a failed run as a published output.
@@ -181,8 +181,7 @@ Each control has a stable, localized accessible name that describes purpose, not
 | Output folder field | editable/read-only text | `Output folder` | State that it is the destination for staged publication. Do not repeat the full path in status text. |
 | Folder button | button | `Choose Output Folder` | State that a folder picker opens. |
 | File stem | editable text | `File stem` | State that Core safe-filename policy normalizes it. |
-| Container group | radio group | `Container` | Values are `MP4` and `Unifi MP4`; semantic compliance is not implied by selection. |
-| FPS control | combo box or radio group | `Frame rate target` | Values are `Preserve source`, `24 FPS`, `25 FPS`, `30 FPS`; non-finite or other values are invalid. |
+| UniFi compatibility | checkbox | `Make output UniFi-compatible` | Off by default and available for video runs only. When enabled, target MP4/H.264/AAC and derive an allowed 24/25/30 FPS rate. |
 | Consent checkbox | checkbox | `Use browser session` | State `Off by default; applies only to this run`. |
 | Browser choice | combo box | `Browser` | State that it is required only when consent is on; never expose a profile path. |
 | Environment button | button | `Test Environment` | State that it reports safe capability statuses without starting a download. |
@@ -192,7 +191,7 @@ Each control has a stable, localized accessible name that describes purpose, not
 | Progress bar | progress bar | `Download progress` | Expose determinate value only for a valid fraction; otherwise expose busy/indeterminate state. |
 | Activity log | log/status region | `Activity log` | Contains bounded safe activity text; never raw child stderr or provider diagnostics. |
 | Open Folder | button | `Open Folder` | State the published-result condition; no path interpolation in the name. |
-| Open in Browser | button | `Open in Browser` | State that it opens the verified local MP4 through the OS handler, not a provider page or session. |
+| Open in Browser | button | `Open in Browser` | State that it opens the verified local media file through the OS handler, not a provider page or session. |
 | New run | button | `Start New Run` | State that terminal form/session state will be reset. |
 
 The URL and output-folder controls may expose their own current editable value as required for normal assistive editing, but no surrounding label, tooltip, status, log, exception, or announcement may echo that value. In particular, the shell must never synthesize an accessible name from the URL, query, signature, output path, or browser data.
@@ -248,7 +247,7 @@ Recommended projection fields are:
 - `IsTerminal`, `CancellationRequested`, and `CanCancel`;
 - safe error code/message/retry action, when present;
 - a bounded list of safe activity entries;
-- a published `VerifiedLocalMp4` only after the application has returned one and local re-verification has passed;
+- a published typed local-media result only after the application has returned one and local re-verification has passed;
 - `CanOpenFolder`, `CanOpenInBrowser`, and their safe reasons when disabled.
 
 No field in this projection contains a provider handle, browser-session lease, profile path, cookie, URL object with query/signature, process object, raw argv, child output, exception object, or unrestricted filesystem handle.
@@ -266,8 +265,8 @@ The current Core event types are `DownloadProgress`, `DownloadCompleted`, `Downl
 | Accepted `DownloadProgress` with `Stage == Processing` | `Processing` | Show determinate or indeterminate mode from the event; show `Remuxing or converting media` only as a safe stage/activity label. | Form locks; `Cancel` requests bounded cancellation. |
 | Accepted `DownloadProgress` with `Stage == Publishing` | `Publishing` | Stop presenting download percentage as if it were publication progress; use indeterminate or a separately defined safe publication progress value. | Form locks; publication remains the commit boundary. |
 | Accepted `DownloadProgress` with `Stage == Opening` | `Publishing` or a local-open status projection only if a future application contract explicitly uses this stage; it is not a provider-download state. | Do not expose `Opening` as a claim that a remote browser was opened. | Local opening is handled only by the separate opener action and does not alter download terminal truth. |
-| Accepted `DownloadCompleted` | `Completed` | Stop progress and announce completion only after the application contract says publication is complete. | The reducer is terminal. Enable local actions only for a returned, verified, freshly rechecked local MP4. Do not infer a published path from `StagedArtifact` alone. |
-| Accepted `DownloadCancelled` | `Cancelled` | Stop progress; show cancellation truth. If publication already committed, show that the verified output was preserved as a safe warning/result. | The reducer is terminal. No `Open in Browser` unless the preserved output independently satisfies the local-MP4 gate. Enable a new run after reset. |
+| Accepted `DownloadCompleted` | `Completed` | Stop progress and announce completion only after the application contract says publication is complete. | The reducer is terminal. Enable local actions only for a returned, verified, freshly rechecked local media file. Do not infer a published path from `StagedArtifact` alone. |
+| Accepted `DownloadCancelled` | `Cancelled` | Stop progress; show cancellation truth. If publication already committed, show that the verified output was preserved as a safe warning/result. | The reducer is terminal. No `Open in Browser` unless the preserved output independently satisfies the local-media gate. Enable a new run after reset. |
 | Accepted `DownloadFailed` | `Failed` | Stop progress; show only `SafeDownloadError.UserMessage`, safe code/category, and safe retry action. | The reducer is terminal. Enable retry only when the typed error policy says so; never retry 429 automatically. |
 | Event run differs from current `RunIdentity` | Current state unchanged; no visible stale transition | Do not append activity, change progress, or announce the event. | Core rejection is respected. It cannot re-enable controls, restore consent, replace output, or overwrite a newer run. |
 | Event sequence is not greater than the accepted sequence | Current state unchanged | Ignore the duplicate/out-of-order event for presentation. | Do not announce it and do not change terminal truth. |
@@ -315,8 +314,8 @@ The following copy is the baseline. Implementations may localize it or make it s
 | Publication conflict (`PublicationConflict`, publishing stage) | `A file with that name already exists. Nothing was overwritten.` | Offer `Choose Another Folder`, `Change File Stem`, and `Start New Run` as applicable. Never offer an overwrite checkbox or silently replace the destination. |
 | Publication verification failure | `The staged output could not be verified, so it was not reported as complete.` | Keep the final destination unclaimed; permit a user-initiated new run if the typed error allows it. If cleanup itself warns, say so separately without changing the false-completion rule. |
 | Cancellation before publication (`Cancelled`) | `Cancelled. No published output was reported.` | Keep `Open Folder` and `Open in Browser` disabled unless an independently verified prior output is selected through a separate future action. Offer `Start New Run`. |
-| Cancellation after publication (`Cancelled` with preserved output) | `Cancelled after publication. The verified output was preserved.` | `Open Folder` may be enabled for that verified result. `Open in Browser` still requires the complete local-MP4 recheck. Offer `Start New Run`. |
-| Local opener failure | `The verified local MP4 could not be opened by the operating system.` | Do not retry provider work. Offer `Open Folder` if valid and safe. Do not expose a raw URI, path, or OS exception. |
+| Cancellation after publication (`Cancelled` with preserved output) | `Cancelled after publication. The verified output was preserved.` | `Open Folder` may be enabled for that verified result. `Open in Browser` still requires the complete local-media recheck. Offer `Start New Run`. |
+| Local opener failure | `The verified local media file could not be opened by the operating system.` | Do not retry provider work. Offer `Open Folder` if valid and safe. Do not expose a raw URI, path, or OS exception. |
 | Unknown safe failure (`Unknown`) | `The operation could not be completed. Try again later or check the environment.` | User action follows the typed `RetryAction`; otherwise only `Start New Run` and `Test Environment` are offered. No raw diagnostic is rendered. |
 | Legacy rollback | `The target shell is not ready for this operation. Continue with the preserved legacy app path while validation is completed.` | Rollback is an operator/release action to select a prior verified artifact or launch the existing `app.py` path. The shell must not silently launch Python, embed a sidecar, or claim that rollback was executed by a UI button unless a separate approved integration exists. |
 
@@ -331,7 +330,7 @@ The `RetryAction` is authoritative:
 
 The shell never translates an error category into a retry on its own. In particular, `RateLimited` never causes an automatic 429 recovery.
 
-## 7. Verified-local-MP4 `Open in Browser` contract
+## 7. Verified-local-media `Open in Browser` contract
 
 `Open in Browser` is a local-file convenience action. It is not browser-session selection, provider access, a provider-page opener, a login flow, or a way to resume a download.
 
@@ -339,13 +338,13 @@ The shell never translates an error category into a retry on its own. In particu
 
 Enable `Open in Browser` only when all conditions are true:
 
-1. The current or preserved terminal result identifies a published output as a `VerifiedLocalMp4`.
-2. The output is an MP4 according to the application result, not merely a selected `OutputContainer` value.
+1. The current or preserved terminal result identifies a published, verified local media output.
+2. The output is Matroska in generic mode or MP4 in UniFi compatibility mode according to the application result, not merely a requested option.
 3. The result is freshly reverified immediately before the action: it exists, is readable, and is non-empty.
 4. The current action is not operating on a stale run, staged artifact, unverified artifact, failed result, or in-progress result.
 5. The local opener capability is available through the explicit composition boundary.
 
-The button is disabled for an absent result, metadata-only result without a published local MP4, pre-publication cancellation, failed or unverified output, a path that no longer exists or is unreadable, and any result whose re-verification fails. The disabled description is safe, for example `Available after a published, verified local MP4 is rechecked`.
+The button is disabled for an absent result, metadata-only result without a published local media file, pre-publication cancellation, failed or unverified output, a path that no longer exists or is unreadable, and any result whose re-verification fails. The disabled description is safe, for example `Available after a published, verified local media file is rechecked`.
 
 ### 7.2 Invocation and separation
 
@@ -499,7 +498,7 @@ Record evidence on clean test machines or equivalent isolated environments for b
 - startup and shutdown at the approved .NET SDK and exact Avalonia patch;
 - keyboard-only traversal in the order in section 3, including consent Escape/close behavior;
 - UI Automation tree roles, names, descriptions, states, focus, progress, and live status behavior;
-- Narrator and/or NVDA task completion for entering a request, selecting operation, choosing a folder, consenting, starting, cancelling, reading an error, and opening a verified local MP4;
+- Narrator and/or NVDA task completion for entering a request, selecting operation, choosing a folder, consenting, starting, cancelling, reading an error, and opening a verified local media file;
 - 100%, 125%, 150%, and 200% scaling plus increased text-size behavior;
 - dark, light, and Windows high-contrast presentation;
 - folder dialog cancellation, paths with spaces, permissions, long safe names, and destination collisions;
@@ -545,9 +544,9 @@ Before the Avalonia shell is considered ready for the next integration gate, ver
 
 - one request and one video are enforced through Core policy;
 - metadata, video, and audio are visibly distinct operations;
-- output folder, file stem, MP4/Unifi MP4 container, and optional 24/25/30 FPS target map to typed Core values;
+- output folder and file stem map to typed Core values; video runs expose one off-by-default UniFi compatibility toggle and otherwise use generic Matroska output;
 - browser-session consent is unchecked by default, selected per run, supported-browser-only, and cleared on every terminal path;
-- `Open in Browser` is a separate verified-local-MP4 action and never touches provider/session/network code;
+- `Open in Browser` is a separate verified-local-media action and never touches provider/session/network code;
 - all active, terminal, retry, cancellation, and stale-run behavior is projected from Core lifecycle results;
 - no view or view model holds provider, browser, process, network, filesystem, raw exception, or raw diagnostic state;
 - safe accessible names/descriptions, focus-visible behavior, keyboard order, live announcements, and disabled reasons are present;
@@ -569,7 +568,7 @@ This contract preserves, rather than reopens, the approved direction:
 - Browser-session access remains default-off, explicit, in-memory, no-export, no-persistence, and no-bypass.
 - Publication remains staged, verified, non-overwriting, and the commit point for completion truth.
 - One bounded stream-403 refresh remains distinguishable from no automatic 429 recovery.
-- The local opener remains a separate verified-local-MP4 capability.
+- The local opener remains a separate verified-local-media capability.
 - Windows 10/11 x64 and Linux x64 Ubuntu/Debian-family X11/XWayland are the initial declared rows only after evidence; ARM64 and native Wayland remain unverified.
 - `app.py` remains an operational rollback reference, not a target shell, sidecar, or hidden compatibility dependency.
 
