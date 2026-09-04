@@ -1,4 +1,3 @@
-using System.Net;
 using System.Security;
 using UnifiDownloader.Application;
 using UnifiDownloader.Domain;
@@ -15,28 +14,15 @@ public class LocalStreamStager : ILocalStreamStager
     private const int CopyBufferSize = 64 * 1024;
     private const int MaximumAllocationAttempts = 8;
 
-    private readonly HttpClient httpClient;
-    private readonly BoundedProcessExecutor? ytDlpExecutor;
-    private readonly string? knownLocalDenoPath;
+    private readonly BoundedProcessExecutor ytDlpExecutor;
+    private readonly string knownLocalDenoPath;
     private readonly string stageRootCandidate;
     private readonly long maximumResponseBytes;
     private readonly object gate = new();
     private readonly Dictionary<string, StagedInput> stagedInputs = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ReleasedInput> releasedInputs = new(StringComparer.Ordinal);
 
-    public LocalStreamStager(
-        HttpClient httpClient,
-        string stageRoot,
-        long maximumResponseBytes = DefaultMaximumResponseBytes)
-    {
-        this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        stageRootCandidate = stageRoot ?? throw new ArgumentNullException(nameof(stageRoot));
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumResponseBytes);
-
-        this.maximumResponseBytes = maximumResponseBytes;
-    }
-
-    /// <summary>Production path: let pinned yt-dlp own signed-stream requests.</summary>
+    /// <summary>Let the pinned yt-dlp process own all provider media requests.</summary>
     public LocalStreamStager(
         BoundedProcessExecutor executor,
         string knownLocalDenoPath,
@@ -47,19 +33,12 @@ public class LocalStreamStager : ILocalStreamStager
         if (string.IsNullOrWhiteSpace(knownLocalDenoPath) || !Path.IsPathFullyQualified(knownLocalDenoPath))
             throw new ArgumentException("The JavaScript runtime path must be an absolute local path.", nameof(knownLocalDenoPath));
         this.knownLocalDenoPath = knownLocalDenoPath;
-        httpClient = null!;
+
         stageRootCandidate = stageRoot ?? throw new ArgumentNullException(nameof(stageRoot));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumResponseBytes);
         this.maximumResponseBytes = maximumResponseBytes;
     }
 
-    public LocalStreamStager(
-        string stageRoot,
-        HttpClient httpClient,
-        long maximumResponseBytes = DefaultMaximumResponseBytes)
-        : this(httpClient, stageRoot, maximumResponseBytes)
-    {
-    }
 
     public async ValueTask<ProviderResult<LocalMediaInputs>> StageAsync(
         MediaPlan plan,
@@ -71,15 +50,20 @@ public class LocalStreamStager : ILocalStreamStager
             return Failure<LocalMediaInputs>(SafeInfrastructureErrors.InvalidLocalStreamRequest());
         }
 
-        var sources = new List<(LocalMediaChannel Channel, MediaSource Source)>();
+        var sources = new List<(LocalMediaChannel Channel, string FormatId)>();
+        if (plan.VideoLengthBytes is > 0 && plan.VideoLengthBytes > maximumResponseBytes ||
+            plan.AudioLengthBytes is > 0 && plan.AudioLengthBytes > maximumResponseBytes)
+        {
+            return Failure<LocalMediaInputs>(SafeInfrastructureErrors.LocalStreamTooLarge());
+        }
         if (plan.IsProgressive)
         {
-            if (!plan.Characteristics.HasVideo || !plan.Characteristics.HasAudio || plan.VideoSource is null || plan.AudioSource is not null ||
-                !IsHttpSource(plan.VideoSource))
+            if (!plan.Characteristics.HasVideo || !plan.Characteristics.HasAudio ||
+                string.IsNullOrWhiteSpace(plan.VideoFormatId) || plan.AudioFormatId is not null)
             {
                 return Failure<LocalMediaInputs>(SafeInfrastructureErrors.InvalidLocalStreamRequest());
             }
-            sources.Add((LocalMediaChannel.Video, plan.VideoSource));
+            sources.Add((LocalMediaChannel.Video, plan.VideoFormatId));
         }
         else if (!TryValidatePlan(plan, out sources))
         {
@@ -94,7 +78,7 @@ public class LocalStreamStager : ILocalStreamStager
             foreach (var source in sources)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var staged = await StageOneAsync(plan, source.Channel, source.Source, stageRoot, cancellationToken)
+                var staged = await StageOneAsync(plan, source.Channel, source.FormatId, stageRoot, cancellationToken)
                     .ConfigureAwait(false);
                 if (!staged.IsSuccess)
                 {
@@ -262,7 +246,7 @@ public class LocalStreamStager : ILocalStreamStager
     private async ValueTask<StageOneResult> StageOneAsync(
         MediaPlan plan,
         LocalMediaChannel channel,
-        MediaSource source,
+        string formatId,
         string stageRoot,
         CancellationToken cancellationToken)
     {
@@ -273,80 +257,7 @@ public class LocalStreamStager : ILocalStreamStager
 
         try
         {
-            if (ytDlpExecutor is not null)
-            {
-                return await StageWithYtDlpAsync(plan, channel, path, stageRoot, cancellationToken).ConfigureAwait(false);
-            }
-
-            using var request = new HttpRequestMessage(HttpMethod.Get, source.Address);
-            using var response = await httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken).ConfigureAwait(false);
-
-            if (IsRedirect(response.StatusCode) ||
-                (response.RequestMessage?.RequestUri is { } actualUri && !UriEquals(actualUri, source.Address)))
-            {
-                TryDeleteFile(path);
-                return StageOneResult.Failure(SafeInfrastructureErrors.LocalStreamUnavailable());
-            }
-
-            if (!response.IsSuccessStatusCode)
-            {
-                TryDeleteFile(path);
-                return StageOneResult.Failure(SafeInfrastructureErrors.LocalStreamUnavailable());
-            }
-
-            if (response.Content.Headers.ContentLength is > 0 and var declaredLength &&
-                declaredLength > maximumResponseBytes)
-            {
-                TryDeleteFile(path);
-                return StageOneResult.Failure(SafeInfrastructureErrors.LocalStreamTooLarge());
-            }
-
-            if (response.Content.Headers.ContentLength == 0)
-            {
-                TryDeleteFile(path);
-                return StageOneResult.Failure(SafeInfrastructureErrors.LocalStreamEmpty());
-            }
-
-            await using (var output = new FileStream(
-                path,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                CopyBufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan))
-            await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false))
-            {
-                var buffer = new byte[CopyBufferSize];
-                long total = 0;
-                while (true)
-                {
-                    var read = await input.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
-                    if (read == 0) break;
-                    if (read > maximumResponseBytes - total)
-                    {
-                        TryDeleteFile(path);
-                        return StageOneResult.Failure(SafeInfrastructureErrors.LocalStreamTooLarge());
-                    }
-
-                    await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                    total += read;
-                }
-
-                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            if (!IsVerifiedRegularFileBelowRoot(path, stageRoot, out var lengthBytes))
-            {
-                TryDeleteFile(path);
-                return StageOneResult.Failure(SafeInfrastructureErrors.LocalStreamEmpty());
-            }
-
-            var key = "input-" + Guid.NewGuid().ToString("N");
-            var handle = new LocalMediaInputHandle(key, channel, lengthBytes, verified: true);
-            return StageOneResult.Success(handle, path);
+            return await StageWithYtDlpAsync(plan, channel, formatId, path, stageRoot, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -368,13 +279,11 @@ public class LocalStreamStager : ILocalStreamStager
     private async ValueTask<StageOneResult> StageWithYtDlpAsync(
         MediaPlan plan,
         LocalMediaChannel channel,
+        string formatId,
         string path,
         string stageRoot,
         CancellationToken cancellationToken)
     {
-        var formatId = plan.IsProgressive || channel == LocalMediaChannel.Video
-            ? plan.VideoFormatId
-            : plan.AudioFormatId;
         if (string.IsNullOrWhiteSpace(formatId))
         {
             TryDeleteFile(path);
@@ -389,7 +298,8 @@ public class LocalStreamStager : ILocalStreamStager
             "--no-part",
             "--retries", "1",
             "--fragment-retries", "1",
-            "--socket-timeout", "30"
+            "--socket-timeout", "30",
+            "--max-filesize", "5G"
         };
         if (plan.Request.BrowserSession is { } browser)
         {
@@ -405,7 +315,7 @@ public class LocalStreamStager : ILocalStreamStager
         }
         operation.Add(plan.Request.Video.Address.AbsoluteUri);
         var arguments = YtDlpInvocationPolicy.Build(knownLocalDenoPath!, operation);
-        var result = await ytDlpExecutor!.ExecuteCapturedAsync(
+        var result = await ytDlpExecutor.ExecuteCapturedAsync(
             new ProcessSpec(ToolKey.YtDlp.ToString(), arguments, TimeSpan.FromMinutes(2)),
             cancellationToken).ConfigureAwait(false);
         if (result.Error is not null)
@@ -418,10 +328,15 @@ public class LocalStreamStager : ILocalStreamStager
             TryDeleteFile(path);
             return StageOneResult.Failure(BoundedProcessExecutor.ClassifyNonzeroExit(result.Value));
         }
-        if (!IsVerifiedRegularFileBelowRoot(path, stageRoot, out var lengthBytes) || lengthBytes > maximumResponseBytes)
+        if (!IsVerifiedRegularFileBelowRoot(path, stageRoot, out var lengthBytes))
         {
             TryDeleteFile(path);
             return StageOneResult.Failure(SafeInfrastructureErrors.LocalStreamEmpty());
+        }
+        if (lengthBytes > maximumResponseBytes)
+        {
+            TryDeleteFile(path);
+            return StageOneResult.Failure(SafeInfrastructureErrors.LocalStreamTooLarge());
         }
         return StageOneResult.Success(
             new LocalMediaInputHandle("input-" + Guid.NewGuid().ToString("N"), channel, lengthBytes, verified: true),
@@ -451,7 +366,7 @@ public class LocalStreamStager : ILocalStreamStager
         }
     }
 
-    private bool TryValidatePlan(MediaPlan plan, out List<(LocalMediaChannel Channel, MediaSource Source)> sources)
+    private static bool TryValidatePlan(MediaPlan plan, out List<(LocalMediaChannel Channel, string FormatId)> sources)
     {
         sources = new();
         if (plan is null || plan.Request is null || plan.Characteristics is null ||
@@ -462,13 +377,8 @@ public class LocalStreamStager : ILocalStreamStager
 
         var characteristics = plan.Characteristics;
         if (!characteristics.HasVideo && !characteristics.HasAudio) return false;
-        if (!TryAddSource(plan.VideoSource, characteristics.HasVideo, LocalMediaChannel.Video, sources) ||
-            !TryAddSource(plan.AudioSource, characteristics.HasAudio, LocalMediaChannel.Audio, sources))
-        {
-            return false;
-        }
-
-        if (sources.Count == 2 && UriEquals(sources[0].Source.Address, sources[1].Source.Address))
+        if (!TryAddSource(plan.VideoFormatId, plan.VideoLengthBytes, characteristics.HasVideo, LocalMediaChannel.Video, sources) ||
+            !TryAddSource(plan.AudioFormatId, plan.AudioLengthBytes, characteristics.HasAudio, LocalMediaChannel.Audio, sources))
         {
             return false;
         }
@@ -476,32 +386,23 @@ public class LocalStreamStager : ILocalStreamStager
         return true;
     }
 
-    private bool TryAddSource(
-        MediaSource? source,
+    private static bool TryAddSource(
+        string? formatId,
+        long? lengthBytes,
         bool expected,
         LocalMediaChannel channel,
-        List<(LocalMediaChannel Channel, MediaSource Source)> sources)
+        List<(LocalMediaChannel Channel, string FormatId)> sources)
     {
-        if (expected != (source is not null) || source is null) return !expected;
-        if (!IsHttpSource(source) ||
-            (source.LengthBytes is { } declaredLength &&
-                (declaredLength <= 0 || declaredLength > maximumResponseBytes)))
-        {
-            return false;
-        }
-
-        sources.Add((channel, source));
+        if (expected != (!string.IsNullOrWhiteSpace(formatId)) || formatId is null) return !expected;
+        sources.Add((channel, formatId));
         return true;
     }
 
-    private static bool IsHttpSource(MediaSource source) =>
-        source.Address is not null && source.Address.IsAbsoluteUri &&
-        source.Address.Scheme is "http" or "https";
 
     private static bool IsExpectedSource(MediaPlan plan, LocalMediaChannel channel) => channel switch
     {
-        LocalMediaChannel.Video => plan.Characteristics.HasVideo && plan.VideoSource is not null,
-        LocalMediaChannel.Audio => plan.Characteristics.HasAudio && plan.AudioSource is not null,
+        LocalMediaChannel.Video => plan.Characteristics.HasVideo && !string.IsNullOrWhiteSpace(plan.VideoFormatId),
+        LocalMediaChannel.Audio => plan.Characteristics.HasAudio && !string.IsNullOrWhiteSpace(plan.AudioFormatId),
         _ => false
     };
 
@@ -631,11 +532,6 @@ public class LocalStreamStager : ILocalStreamStager
         return cleanupComplete;
     }
 
-    private static bool IsRedirect(HttpStatusCode statusCode) =>
-        (int)statusCode is >= 300 and <= 399;
-
-    private static bool UriEquals(Uri first, Uri second) =>
-        Uri.Compare(first, second, UriComponents.AbsoluteUri, UriFormat.UriEscaped, StringComparison.Ordinal) == 0;
 
     private static ProviderResult<T> Failure<T>(SafeDownloadError error) => new(default, error);
 
@@ -648,19 +544,5 @@ public class LocalStreamStager : ILocalStreamStager
         public bool IsSuccess => Error is null;
         public static StageOneResult Success(LocalMediaInputHandle handle, string path) => new(handle, path, null);
         public static StageOneResult Failure(SafeDownloadError error) => new(null, null, error);
-    }
-}
-
-/// <summary>Descriptive alias for callers that prefer the transport-specific name.</summary>
-public sealed class HttpLocalStreamStager : LocalStreamStager
-{
-    public HttpLocalStreamStager(HttpClient httpClient, string stageRoot, long maximumResponseBytes = DefaultMaximumResponseBytes)
-        : base(httpClient, stageRoot, maximumResponseBytes)
-    {
-    }
-
-    public HttpLocalStreamStager(string stageRoot, HttpClient httpClient, long maximumResponseBytes = DefaultMaximumResponseBytes)
-        : base(httpClient, stageRoot, maximumResponseBytes)
-    {
     }
 }

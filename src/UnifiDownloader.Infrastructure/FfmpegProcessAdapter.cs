@@ -175,7 +175,7 @@ public sealed class FfmpegProcessAdapter
         if (plan.IsProgressive)
         {
             if (!characteristics.HasVideo || !characteristics.HasAudio ||
-                plan.VideoSource is null || plan.AudioSource is not null ||
+                string.IsNullOrWhiteSpace(plan.VideoFormatId) || plan.AudioFormatId is not null ||
                 !TryValidateRegularFile(inputs.VideoPath, out var progressiveVideo) ||
                 inputs.AudioPath is not null)
             {
@@ -187,12 +187,12 @@ public sealed class FfmpegProcessAdapter
         }
         else if (!TryValidateChannel(
                 characteristics.HasVideo,
-                plan.VideoSource is not null,
+                !string.IsNullOrWhiteSpace(plan.VideoFormatId),
                 inputs.VideoPath,
                 out videoPath) ||
             !TryValidateChannel(
                 characteristics.HasAudio,
-                plan.AudioSource is not null,
+                !string.IsNullOrWhiteSpace(plan.AudioFormatId),
                 inputs.AudioPath,
                 out audioPath))
         {

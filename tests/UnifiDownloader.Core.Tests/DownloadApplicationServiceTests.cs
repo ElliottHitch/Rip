@@ -169,6 +169,60 @@ public sealed class DownloadApplicationServiceTests
         Assert.Null(ports.Stager.Inputs.Video);
     }
 
+    [Fact]
+    public async Task One_access_denied_stage_refreshes_once_then_stages_fresh_plan()
+    {
+        var ports = FakePorts.Create(DownloadOperation.Video);
+        ports.Stager.StageErrors.Enqueue(AccessDeniedError());
+
+        var result = await ports.Service.ExecuteAsync(ports.Request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(DownloadRunStatus.Published, result.Status);
+        Assert.Equal(2, ports.Provider.ResolveCalls);
+        Assert.Equal(2, ports.Stager.StageCalls);
+        Assert.Equal(["metadata", "resolve", "stage", "resolve", "stage", "process", "publish", "release"], ports.Calls);
+    }
+
+    [Fact]
+    public async Task Rate_limit_does_not_enter_the_refresh_loop()
+    {
+        var ports = FakePorts.Create(DownloadOperation.Video);
+        ports.Stager.StageErrors.Enqueue(SafeDownloadError.Create(
+            DownloadErrorCode.RateLimited,
+            DownloadStage.Downloading,
+            "rate limited",
+            RetryAction.UserActionRequired,
+            new RedactedDiagnosticToken("diag-rate-limited")));
+
+        var result = await ports.Service.ExecuteAsync(ports.Request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(DownloadRunStatus.Failed, result.Status);
+        Assert.Equal(1, ports.Provider.ResolveCalls);
+        Assert.Equal(1, ports.Stager.StageCalls);
+        Assert.Equal(["metadata", "resolve", "stage"], ports.Calls);
+    }
+
+    [Theory]
+    [InlineData("return")]
+    [InlineData("throw")]
+    [InlineData("cancel")]
+    public async Task Refresh_failure_return_throw_and_cancellation_are_safe(string mode)
+    {
+        var ports = FakePorts.Create(DownloadOperation.Video);
+        ports.Stager.StageErrors.Enqueue(AccessDeniedError());
+        ports.RefreshMode = mode;
+        using var cancellation = new CancellationTokenSource();
+        ports.RefreshCancellation = cancellation;
+
+        var result = await ports.Service.ExecuteAsync(ports.Request, cancellation.Token);
+
+        Assert.Equal(mode == "cancel" ? DownloadRunStatus.Cancelled : DownloadRunStatus.Failed, result.Status);
+        Assert.Equal(mode == "cancel" ? DownloadErrorCode.Cancelled : DownloadErrorCode.ProviderUnavailable, result.Error!.Code);
+        Assert.Equal(2, ports.Provider.ResolveCalls);
+        Assert.Equal(1, ports.Stager.StageCalls);
+        Assert.DoesNotContain("https://", result.Error.UserMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData("provider")]
     [InlineData("resolve")]
@@ -290,6 +344,13 @@ public sealed class DownloadApplicationServiceTests
         RetryAction.UserActionRequired,
         new RedactedDiagnosticToken("diag-test-failure"));
 
+    private static SafeDownloadError AccessDeniedError() => SafeDownloadError.Create(
+        DownloadErrorCode.AccessDenied,
+        DownloadStage.Downloading,
+        "stream access denied",
+        RetryAction.RefreshStream,
+        new RedactedDiagnosticToken("diag-access-denied"));
+
     private static LocalMediaInputHandle VideoHandle(string key = "video-input") =>
         new(key, LocalMediaChannel.Video, 10, verified: true);
 
@@ -342,6 +403,8 @@ public sealed class DownloadApplicationServiceTests
         public FakeObserver Observer { get; }
         public FakeDiagnostics Diagnostics { get; }
         public DownloadApplicationService Service { get; }
+        public string? RefreshMode { get; set; }
+        public CancellationTokenSource? RefreshCancellation { get; set; }
         public MetadataSnapshot Metadata { get; set; } = new("Fixture title", TimeSpan.FromSeconds(5), "Fixture uploader", null);
 
         public MediaPlan Plan => new(
@@ -349,14 +412,15 @@ public sealed class DownloadApplicationServiceTests
             Request.Operation == DownloadOperation.Audio
                 ? new MediaCharacteristics(OutputContainer.Mp4, VideoCodec.Unknown, AudioCodec.Aac, false, true)
                 : new MediaCharacteristics(OutputContainer.Mp4, VideoCodec.H264, AudioCodec.Aac, true, true),
-            Request.Operation == DownloadOperation.Audio ? null : new MediaSource(new Uri("https://source.test/video")),
-            Request.Operation == DownloadOperation.Audio ? new MediaSource(new Uri("https://source.test/audio")) : new MediaSource(new Uri("https://source.test/audio")));
+            Request.Operation == DownloadOperation.Audio ? null : "video-format",
+            Request.Operation == DownloadOperation.Audio ? "audio-format" : "audio-format");
     }
 
     private sealed class FakeProvider(FakePorts ports) : IVideoProvider
     {
         public BrowserSessionSelection? MetadataBrowser { get; private set; }
         public DownloadRequest? ResolveRequest { get; private set; }
+        public int ResolveCalls { get; private set; }
 
         public ValueTask<ProviderResult<MetadataSnapshot>> ReadMetadataAsync(
             VideoReference video,
@@ -377,8 +441,17 @@ public sealed class DownloadApplicationServiceTests
             CancellationToken cancellationToken)
         {
             ports.Calls.Add("resolve");
+            ResolveCalls++;
             ResolveRequest = request;
             if (ports.ThrowAt == "resolve") throw new InvalidOperationException("exception=/secret/resolve");
+            if (ResolveCalls > 1 && ports.RefreshMode == "throw") throw new InvalidOperationException("refresh exception=/secret/refresh");
+            if (ResolveCalls > 1 && ports.RefreshMode == "cancel")
+            {
+                ports.RefreshCancellation!.Cancel();
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            if (ResolveCalls > 1 && ports.RefreshMode == "return")
+                return ValueTask.FromResult(new ProviderResult<MediaPlan>(null, Error("refresh")));
             return ports.FailAt == "resolve"
                 ? ValueTask.FromResult(new ProviderResult<MediaPlan>(null, Error("resolve")))
                 : ValueTask.FromResult(new ProviderResult<MediaPlan>(ports.Plan, null));
@@ -391,6 +464,8 @@ public sealed class DownloadApplicationServiceTests
         public LocalMediaInputs? Inputs { get; private set; }
         public LocalMediaInputs? InputsOverride { get; set; }
         public bool ReturnNullInputs { get; set; }
+        public int StageCalls { get; private set; }
+        public Queue<SafeDownloadError> StageErrors { get; } = new();
         public int ReleaseCalls { get; private set; }
         public bool ReleaseTokenWasCancelled { get; private set; }
         public ProviderResult<StageReleaseResult> ReleaseResult { get; set; } = new(new StageReleaseResult(1, true), null);
@@ -398,11 +473,16 @@ public sealed class DownloadApplicationServiceTests
         public ValueTask<ProviderResult<LocalMediaInputs>> StageAsync(MediaPlan plan, CancellationToken cancellationToken)
         {
             ports.Calls.Add("stage");
+            StageCalls++;
             Plan = plan;
             if (ports.ThrowAt == "stage") throw new InvalidOperationException("exception=/secret/stage");
             if (ports.FailAt == "stage")
             {
                 return ValueTask.FromResult(new ProviderResult<LocalMediaInputs>(null, Error("stage")));
+            }
+            if (StageErrors.TryDequeue(out var stageError))
+            {
+                return ValueTask.FromResult(new ProviderResult<LocalMediaInputs>(null, stageError));
             }
 
             var inputs = InputsOverride ?? (plan.Request.Operation == DownloadOperation.Audio

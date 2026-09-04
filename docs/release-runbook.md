@@ -62,12 +62,12 @@ On Windows PowerShell:
 .\packaging\publish.ps1 -Rid win-x64
 ```
 
-The wrapper runs locked restore, self-contained onedir publish, file-level clean-install validation, provenance/SBOM/notice generation, checksums, and a fixed-metadata archive. Linux targets produce a tar.gz; Windows produces a ZIP. The output is under `artifacts/<version>/<rid>/`, with a directory named `unifi-downloader-<rid>`, an archive named `unifi-downloader-<version>-<rid>`, a root `SHA256SUMS`, and `BUILD-BLOCKER.txt` only when the workflow is blocked. The output directory includes `PROVENANCE.json`, `tool-provenance.json`, `SBOM.spdx.json`, `NOTICE.md`, `RELEASE-GATES.md`, `unifi-downloader.tools.example.json`, and its own `SHA256SUMS`.
+The wrapper runs locked restore, self-contained onedir publish, file-level clean-install validation, provenance/SBOM/notice generation, checksums, and a fixed-metadata archive. Linux targets produce a tar.gz; Windows produces a ZIP. The output is under `artifacts/<version>/<rid>/`, with a directory named `youtube-downloader-<rid>`, an archive named `youtube-downloader-<version>-<rid>`, a root `SHA256SUMS`, and `BUILD-BLOCKER.txt` only when the workflow is blocked. The output directory includes `PROVENANCE.json`, `tool-provenance.json`, `SBOM.spdx.json`, `NOTICE.md`, `RELEASE-GATES.md`, `unifi-downloader.tools.example.json`, and its own `SHA256SUMS`.
 
 The wrapper runs `packaging/verify.py` before returning success. To recheck an unpacked directory manually:
 
 ```sh
-python3 packaging/verify.py artifacts/<version>/<rid>/unifi-downloader-<rid>
+python3 packaging/verify.py artifacts/<version>/<rid>/youtube-downloader-<rid>
 sha256sum -c artifacts/<version>/<rid>/SHA256SUMS
 ```
 

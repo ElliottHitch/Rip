@@ -342,7 +342,7 @@ internal static class SafeInfrastructureErrors
         new RedactedDiagnosticToken("diag-local-stream-unavailable"));
 
     public static SafeDownloadError LocalStreamTooLarge() => SafeDownloadError.Create(
-        DownloadErrorCode.InvalidRequest,
+        DownloadErrorCode.TooLarge,
         DownloadStage.Downloading,
         "The media stream exceeds the configured staging limit.",
         RetryAction.UserActionRequired,

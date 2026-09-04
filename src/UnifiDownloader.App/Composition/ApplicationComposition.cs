@@ -317,7 +317,6 @@ public static class ApplicationComposition
     public static ComposedApplication Create(
         IUiDispatcher? dispatcher = null,
         string? toolManifestPath = null,
-        HttpClient? httpClient = null,
         Func<string>? stagingRootFactory = null)
     {
         var stagingRoot = CompositionStagingRoot.Create(stagingRootFactory);
@@ -333,12 +332,10 @@ public static class ApplicationComposition
             var denoPath = configuration.Tools.TryGetValue(ToolKey.Deno.ToString(), out var deno)
                 ? deno.ExecutablePath
                 : Path.Combine(AppContext.BaseDirectory, "deno-unconfigured");
-            var stager = httpClient is null
-                ? new LocalStreamStager(
-                    (BoundedProcessExecutor)infrastructure.ProcessExecutor,
-                    denoPath,
-                    root)
-                : new LocalStreamStager(httpClient, root);
+            var stager = new LocalStreamStager(
+                (BoundedProcessExecutor)infrastructure.ProcessExecutor,
+                denoPath,
+                root);
             var provider = new YtDlpVideoProvider((BoundedProcessExecutor)infrastructure.ProcessExecutor, denoPath);
             var processor = new FfmpegStagedMediaProcessor(
                 publication.Ffmpeg,

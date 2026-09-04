@@ -502,8 +502,8 @@ public sealed class FfmpegProcessAdapterTests
                 new OutputOptions("/tmp/synthetic-final-destination", "user-final-SENTINEL", target, FrameRateTarget: frameRateTarget),
                 BrowserSessionSelection.Create(BrowserKind.Firefox)),
             new MediaCharacteristics(OutputContainer.Mp4, videoCodec, audioCodec, hasVideo, hasAudio, sourceFrameRate),
-            hasVideo ? new MediaSource(new Uri(VideoStreamUrl)) : null,
-            hasAudio ? new MediaSource(new Uri(AudioStreamUrl)) : null);
+            hasVideo ? "video-format" : null,
+            hasAudio ? "audio-format" : null);
 
     private enum FixtureMode
     {

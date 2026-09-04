@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using UnifiDownloader.Application;
 using UnifiDownloader.Domain;
 
@@ -327,9 +328,7 @@ public sealed class BoundedProcessExecutor : IProcessExecutor
     }
 
     private static bool ContainsHttpStatus(string output, int statusCode) =>
-        output.Contains($"HTTP Error {statusCode}", StringComparison.OrdinalIgnoreCase) ||
-        output.Contains($"HTTP {statusCode}", StringComparison.OrdinalIgnoreCase) ||
-        output.Contains($"Error {statusCode}", StringComparison.OrdinalIgnoreCase);
+        Regex.IsMatch(output, $"\\bHTTP(?:\\s+Error)?\\s+{statusCode}\\b|\\bError\\s+{statusCode}\\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static bool TryReadStructuredFailure(string output, out string code)
     {

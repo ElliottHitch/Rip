@@ -336,7 +336,26 @@ public sealed class DownloadApplicationService
 
             streamRefreshAttempts++;
             await ProgressAsync(run, DownloadStage.Resolving, sequence).ConfigureAwait(false);
-            var refreshed = await provider.ResolveMediaAsync(request, metadata, cancellationToken).ConfigureAwait(false);
+            ProviderResult<MediaPlan> refreshed;
+            try
+            {
+                refreshed = await provider.ResolveMediaAsync(request, metadata, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return await CancelAsync(run, DownloadStage.Resolving, metadata, cleanupComplete: true, sequence)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                return await FailAsync(
+                    run,
+                    DownloadStage.Resolving,
+                    SafeDownloadErrors.ProviderRefreshFailed(),
+                    metadata,
+                    cleanupComplete: true,
+                    sequence).ConfigureAwait(false);
+            }
             if (refreshed.Error is not null || refreshed.Value is null)
             {
                 stageResult = refreshed.Error is not null
@@ -657,7 +676,7 @@ public sealed class DownloadApplicationService
         if (plan.IsProgressive)
         {
             return plan.Characteristics.HasVideo && plan.Characteristics.HasAudio &&
-                plan.VideoSource is not null && plan.AudioSource is null &&
+                !string.IsNullOrWhiteSpace(plan.VideoFormatId) && plan.AudioFormatId is null &&
                 inputs.Video is { Channel: LocalMediaChannel.Video, Verified: true, LengthBytes: > 0 } &&
                 inputs.Audio is null;
         }
@@ -666,14 +685,14 @@ public sealed class DownloadApplicationService
         if (inputs.Video is not null)
         {
             if (!plan.Characteristics.HasVideo ||
-                plan.VideoSource is null ||
+                string.IsNullOrWhiteSpace(plan.VideoFormatId) ||
                 !IsValidStagedHandle(inputs.Video, LocalMediaChannel.Video) ||
                 !TryAddUniqueHandle(inputs.Video, handles))
             {
                 return false;
             }
         }
-        else if (plan.Characteristics.HasVideo || plan.VideoSource is not null)
+        else if (plan.Characteristics.HasVideo || plan.VideoFormatId is not null)
         {
             return false;
         }
@@ -681,14 +700,14 @@ public sealed class DownloadApplicationService
         if (inputs.Audio is not null)
         {
             if (!plan.Characteristics.HasAudio ||
-                plan.AudioSource is null ||
+                string.IsNullOrWhiteSpace(plan.AudioFormatId) ||
                 !IsValidStagedHandle(inputs.Audio, LocalMediaChannel.Audio) ||
                 !TryAddUniqueHandle(inputs.Audio, handles))
             {
                 return false;
             }
         }
-        else if (plan.Characteristics.HasAudio || plan.AudioSource is not null)
+        else if (plan.Characteristics.HasAudio || plan.AudioFormatId is not null)
         {
             return false;
         }

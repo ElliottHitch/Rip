@@ -186,7 +186,7 @@ def sbom(version: str, rid: str, sdk: str, pins: dict[str, str]) -> dict:
     for name, package_version in sorted(pins.items()):
         packages.append({"SPDXID": "SPDXRef-" + re.sub(r"[^A-Za-z0-9.-]", "-", name), "name": name, "versionInfo": package_version, "downloadLocation": "NOASSERTION", "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION"})
     packages.append({"SPDXID": "SPDXRef-DotNet-SDK", "name": ".NET SDK", "versionInfo": sdk, "downloadLocation": "NOASSERTION", "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION"})
-    return {"spdxVersion": "SPDX-2.3", "dataLicense": "CC0-1.0", "SPDXID": "SPDXRef-DOCUMENT", "name": f"unifi-downloader-{version}-{rid}", "documentNamespace": f"https://example.invalid/unifi-downloader/provenance/{version}/{rid}", "creationInfo": {"created": "1970-01-01T00:00:00Z", "creators": ["Tool: unifi-downloader packaging workflow"]}, "packages": packages}
+    return {"spdxVersion": "SPDX-2.3", "dataLicense": "CC0-1.0", "SPDXID": "SPDXRef-DOCUMENT", "name": f"youtube-downloader-{version}-{rid}", "documentNamespace": f"https://example.invalid/youtube-downloader/provenance/{version}/{rid}", "creationInfo": {"created": "1970-01-01T00:00:00Z", "creators": ["Tool: YouTube Downloader packaging workflow"]}, "packages": packages}
 
 
 def archive_tar(source: Path, destination: Path) -> None:
@@ -288,7 +288,7 @@ def publish(root: Path, rid: str, configuration: str) -> Path:
         raise PublishFailure("dotnet was not found on PATH")
 
     output_root = root / "artifacts" / version / rid
-    package_dir = output_root / f"unifi-downloader-{rid}"
+    package_dir = output_root / f"youtube-downloader-{rid}"
     if output_root.exists():
         shutil.rmtree(output_root)
     package_dir.mkdir(parents=True)
@@ -319,7 +319,7 @@ def publish(root: Path, rid: str, configuration: str) -> Path:
     write_checksums(package_dir, package_dir / "SHA256SUMS")
     clean_install_check(package_dir, rid, root)
 
-    archive = output_root / (f"unifi-downloader-{version}-{rid}.zip" if rid.startswith("win-") else f"unifi-downloader-{version}-{rid}.tar.gz")
+    archive = output_root / (f"youtube-downloader-{version}-{rid}.zip" if rid.startswith("win-") else f"youtube-downloader-{version}-{rid}.tar.gz")
     if rid.startswith("win-"):
         archive_zip(package_dir, archive)
     else:
@@ -341,7 +341,7 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     try:
         output = publish(root, args.rid, args.configuration)
-        verify = [sys.executable, str(root / "packaging" / "verify.py"), str(output / f"unifi-downloader-{args.rid}")]
+        verify = [sys.executable, str(root / "packaging" / "verify.py"), str(output / f"youtube-downloader-{args.rid}")]
         run_checked(verify, root)
         return 0
     except (PublishFailure, OSError, json.JSONDecodeError, ElementTree.ParseError) as failure:

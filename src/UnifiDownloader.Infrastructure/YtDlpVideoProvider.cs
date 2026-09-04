@@ -145,15 +145,14 @@ public sealed class YtDlpVideoProvider : IVideoProvider
             hasVideo,
             hasAudio,
             hasVideo ? candidate.FrameRate : null);
-        var source = new MediaSource(candidate.Source, candidate.LengthBytes);
         return new ProviderResult<MediaPlan>(
             new MediaPlan(
                 request,
                 characteristics,
-                selection == FormatSelection.Video ? source : null,
-                selection == FormatSelection.Audio ? source : null,
                 selection == FormatSelection.Video ? candidate.FormatId : null,
-                selection == FormatSelection.Audio ? candidate.FormatId : null),
+                selection == FormatSelection.Audio ? candidate.FormatId : null,
+                selection == FormatSelection.Video ? candidate.LengthBytes : null,
+                selection == FormatSelection.Audio ? candidate.LengthBytes : null),
             null);
     }
 
@@ -171,10 +170,10 @@ public sealed class YtDlpVideoProvider : IVideoProvider
         return new ProviderResult<MediaPlan>(new MediaPlan(
             request,
             characteristics,
-            new MediaSource(video.Source, video.LengthBytes),
-            new MediaSource(audio.Source, audio.LengthBytes),
             video.FormatId,
-            audio.FormatId), null);
+            audio.FormatId,
+            video.LengthBytes,
+            audio.LengthBytes), null);
     }
 
     private static ProviderResult<MediaPlan> BuildProgressivePlan(DownloadRequest request, FormatDescriptor progressive)
@@ -188,13 +187,13 @@ public sealed class YtDlpVideoProvider : IVideoProvider
             HasVideo: true,
             HasAudio: true,
             progressive.FrameRate);
-        // Only VideoSource is populated: one opaque input is staged and mapped to both tracks.
+        // Only the video format identity is populated: one input is staged and mapped to both tracks.
         return new ProviderResult<MediaPlan>(new MediaPlan(
             request,
             characteristics,
-            new MediaSource(progressive.Source, progressive.LengthBytes),
-            null,
             progressive.FormatId,
+            null,
+            progressive.LengthBytes,
             null,
             IsProgressive: true), null);
     }

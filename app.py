@@ -1285,6 +1285,7 @@ class YouTubeDownloaderApp:
             "retries": 1,
             "fragment_retries": 1,
             "socket_timeout": 30,
+            "max_filesize": MAX_FILE_BYTES,
         }
         ydl_opts.update(getattr(self, "_active_browser_options", {}))
         converted_error: Optional[PipelineError] = None

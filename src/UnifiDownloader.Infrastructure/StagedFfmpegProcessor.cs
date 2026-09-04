@@ -64,14 +64,14 @@ public class StagedFfmpegProcessor : IStagedMediaProcessor
         if (inputs.Video is not null)
         {
             if (inputs.Video.Channel != LocalMediaChannel.Video ||
-                !plan.Characteristics.HasVideo || plan.VideoSource is null ||
+                !plan.Characteristics.HasVideo || string.IsNullOrWhiteSpace(plan.VideoFormatId) ||
                 !TryAddUnique(inputs.Video, handles) ||
                 !stager.TryResolve(plan, inputs.Video, out video))
             {
                 return false;
             }
         }
-        else if (plan.Characteristics.HasVideo || plan.VideoSource is not null)
+        else if (plan.Characteristics.HasVideo || plan.VideoFormatId is not null)
         {
             return false;
         }
@@ -79,14 +79,14 @@ public class StagedFfmpegProcessor : IStagedMediaProcessor
         if (inputs.Audio is not null)
         {
             if (inputs.Audio.Channel != LocalMediaChannel.Audio ||
-                !plan.Characteristics.HasAudio || plan.AudioSource is null ||
+                !plan.Characteristics.HasAudio || string.IsNullOrWhiteSpace(plan.AudioFormatId) ||
                 !TryAddUnique(inputs.Audio, handles) ||
                 !stager.TryResolve(plan, inputs.Audio, out audio))
             {
                 return false;
             }
         }
-        else if (plan.Characteristics.HasAudio || plan.AudioSource is not null)
+        else if (plan.Characteristics.HasAudio || plan.AudioFormatId is not null)
         {
             return false;
         }

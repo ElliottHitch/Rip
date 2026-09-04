@@ -78,14 +78,14 @@ public sealed class YtDlpVideoProviderTests
         var audio = await provider.ResolveMediaAsync(audioRequest, new MetadataSnapshot("Fixture", null, null, null), CancellationToken.None);
 
         Assert.True(video.IsSuccess);
-        Assert.Equal("https://cdn.example.invalid/video-high.mp4", video.Value!.VideoSource!.Address.AbsoluteUri);
-        Assert.Equal("https://cdn.example.invalid/audio-high.m4a", video.Value.AudioSource!.Address.AbsoluteUri);
+        Assert.Equal("video-high", video.Value!.VideoFormatId);
+        Assert.Equal("audio-high", video.Value.AudioFormatId);
         Assert.True(video.Value.Characteristics.HasVideo);
         Assert.True(video.Value.Characteristics.HasAudio);
         Assert.Equal(VideoCodec.H264, video.Value.Characteristics.VideoCodec);
         Assert.True(audio.IsSuccess);
-        Assert.Equal("https://cdn.example.invalid/audio-high.m4a", audio.Value!.AudioSource!.Address.AbsoluteUri);
-        Assert.Null(audio.Value.VideoSource);
+        Assert.Equal("audio-high", audio.Value!.AudioFormatId);
+        Assert.Null(audio.Value.VideoFormatId);
         Assert.False(audio.Value.Characteristics.HasVideo);
         Assert.True(audio.Value.Characteristics.HasAudio);
         Assert.Equal(AudioCodec.Aac, audio.Value.Characteristics.AudioCodec);

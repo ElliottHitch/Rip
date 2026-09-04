@@ -23,7 +23,7 @@
           <ComboBox AutomationProperties.Name="Operation" ItemsSource="{Binding Operations}"
                     AutomationProperties.HelpText="Select exactly one operation: Metadata, Video, or Audio."
                     SelectedItem="{Binding SelectedOperation, Mode=TwoWay}" />
-          <TextBlock Text="Metadata resolves safe information only; Video downloads video; Audio downloads audio." Opacity="0.72" TextWrapping="Wrap" />
+          <TextBlock Text="Metadata resolves safe information only; Video downloads the highest-quality video and audio and combines them; Audio downloads the highest-quality audio." Opacity="0.72" TextWrapping="Wrap" />
         </StackPanel>
       </GroupBox>
 
@@ -47,8 +47,10 @@
                     AutomationProperties.Name="Make output UniFi-compatible"
                     AutomationProperties.HelpText="Off by default. When enabled, converts to the bounded UniFi MP4 compatibility profile."
                     IsChecked="{Binding MakeUnifiCompatible, Mode=TwoWay}"
+                    IsVisible="{Binding IsVideoOperation}"
                     IsEnabled="{Binding OutputControlsEnabled}" />
-          <TextBlock Text="Off: preserve the selected source codecs in a lossless Matroska container. On: use the bounded MP4 / H.264 / AAC compatibility profile." Opacity="0.72" TextWrapping="Wrap" />
+          <TextBlock Text="Off: preserve the selected source codecs in a lossless Matroska container. On: use the bounded MP4 / H.264 / AAC compatibility profile." Opacity="0.72" TextWrapping="Wrap"
+                     IsVisible="{Binding IsVideoOperation}" />
           <TextBlock Text="Output settings are not used for metadata." Opacity="0.72" />
         </StackPanel>
       </GroupBox>
@@ -124,6 +126,9 @@
           <TextBlock Text="{Binding MetadataSummary}" TextWrapping="Wrap" />
           <TextBlock Text="{Binding CompletionText}" TextWrapping="Wrap" />
           <TextBlock Text="{Binding ErrorMessage}" Foreground="OrangeRed" TextWrapping="Wrap" />
+          <Button Content="Try Again" AutomationProperties.Name="Try Again"
+                  AutomationProperties.HelpText="Retries the failed request using the current validated fields."
+                  IsEnabled="{Binding CanRetry}" Click="RetryClicked" />
           <Button Content="Open in Browser" AutomationProperties.Name="Open in Browser"
                   AutomationProperties.HelpText="Opens the verified local output through the operating system handler."
                   IsEnabled="{Binding CanOpenInBrowser}" Click="OpenInBrowserClicked" />

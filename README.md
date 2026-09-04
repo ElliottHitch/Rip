@@ -179,7 +179,9 @@ The .NET suite uses deterministic fixtures and does not contact YouTube. Run it 
 
 ```sh
 dotnet restore --locked-mode
-dotnet test --configuration Release --no-restore
+dotnet run --project tests/UnifiDownloader.Core.Tests/UnifiDownloader.Core.Tests.csproj --configuration Release --no-build --no-restore
+dotnet run --project tests/UnifiDownloader.Infrastructure.Tests/UnifiDownloader.Infrastructure.Tests.csproj --configuration Release --no-build --no-restore
+dotnet run --project tests/UnifiDownloader.App.Tests/UnifiDownloader.App.Tests.csproj --configuration Release --no-build --no-restore
 dotnet run --project src/UnifiDownloader.App/UnifiDownloader.App.csproj --configuration Release --no-build --no-restore -- --deterministic-smoke
 git diff --check
 ```
@@ -191,7 +193,7 @@ python -m unittest discover -s tests -v
 python -m py_compile app.py tests/test_pipeline.py
 ```
 
-These tests cover one-video validation, metadata-only versus media operations, typed container and frame-rate mapping, bounded 403 refresh and no automatic 429 recovery, cancellation and stale-event rejection, redacted diagnostics, staged non-overwriting publication, cleanup warnings, output verification, browser-session option propagation and reset, encoded local file URIs, safe opener failures, and missing-capability states. They do not prove live service availability, real browser-profile behavior, account access, native default-handler integration on every OS, every real-media FFmpeg combination, whole-operation atomicity, or the absence of check-then-use filesystem races.
+These tests cover one-video validation, metadata-only versus media operations, typed container and frame-rate mapping, progressive fallback, bounded 403 refresh and no automatic 429 recovery, cancellation and stale-event rejection, redacted diagnostics, staged non-overwriting publication, cleanup warnings, output verification, browser-session option propagation and reset, encoded local file URIs, safe opener failures, and missing-capability states. They do not prove live service availability, real browser-profile behavior, account access, native default-handler integration on every OS, every real-media FFmpeg combination, whole-operation atomicity, packaging, installers, or startup.
 
 During migration, `app.py` remains the runnable legacy and rollback path until the later shell, platform, packaging, and release gates pass. Rollback means selecting a prior verified artifact or launching that preserved path; it never moves, overwrites, or deletes downloaded media.
 

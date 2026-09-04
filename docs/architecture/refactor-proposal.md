@@ -1,6 +1,6 @@
 # Downloader ground-up refactor proposal
 
-Status: approved defaults; Avalonia shell gate implemented; release remains gated by validation
+Status: historical architecture record; current generic defaults and optional compatibility profile are authoritative in README and the implementation
 Evidence date: 2026-09-03 UTC
 Repository baseline: `agent/download-pipeline-hardening`, HEAD `6d6f65e`
 Target release platforms: Windows and Linux, with an explicitly declared support tier
@@ -23,7 +23,7 @@ Selected target under the approved defaults: .NET domain/application core + thin
 
 This recommendation explicitly rejects Python GUI frameworks, including the former PySide6 proposal and the current Tkinter shell, as target paths. Tauri 2/Rust remains the strongest contingent alternative if the owner accepts WebView/runtime, TypeScript accessibility, and sidecar-permission complexity; it is not the default merely because Rust is attractive. The stack is chosen by product fit, not Rust/Tauri loyalty.
 
-The recommendation preserves the product/security contract: one YouTube video per request; separate video/audio yt-dlp operations; FFmpeg remux/transcode; Unifi MP4 target; staged non-overwrite publication; progress/activity/cancellation; bounded stream-403 refresh; no automatic 429 recovery; explicit local `cookiesfrombrowser` opt-in; and a separate verified-local-MP4 `Open in Browser` action. No live YouTube request, real browser profile, authentication, package build, screen-reader test, or release action was performed for this proposal.
+The recommendation preserves the product/security contract: one YouTube video per request; highest-quality dedicated video/audio yt-dlp operations with one progressive fallback; generic Matroska remux by default and an optional UniFi MP4 compatibility profile; staged non-overwrite publication; progress/activity/cancellation; bounded stream-403 refresh; no automatic 429 recovery; explicit local `cookiesfrombrowser` opt-in; and a separate verified-local-output `Open in Browser` action. No live YouTube request, real browser profile, authentication, package build, screen-reader test, or release action was performed for this proposal.
 
 ### Current implementation status
 
@@ -136,7 +136,7 @@ These are compatibility requirements, not optional implementation details. Any i
 
 - One request resolves exactly one video; playlists and multi-video extractor results fail clearly.
 - Metadata resolution and video/audio stream downloads remain separate yt-dlp operations.
-- Output is MP4. Transcoding targets H.264 High/yuv420p, AAC stereo at 192 kbps, an allowed 24/25/30 FPS target, 40 Mbps video, and 46 Mbps maximum rate; remuxed streams may retain unchecked source properties. The five-GiB limit remains a warning/non-compliance result, not silent deletion or rejection. [DOC]
+- Generic output is Matroska when possible; the optional UniFi profile targets MP4 with H.264 High/yuv420p, AAC stereo at 192 kbps, an allowed 24/25/30 FPS target, 40 Mbps video, and 46 Mbps maximum rate. Remuxed streams may retain unchecked source properties. The five-GiB staging bound is enforced before/post download, while final compatibility warnings remain explicit. [DOC]
 - Output is staged before publication and must be non-empty before it is considered complete. The verified target publisher rejects an existing destination without overwrite or collision suffixes, copies the owned source to a private temporary file in the selected destination, verifies the positive exact length, and commits with a same-directory non-overwriting rename before re-verifying the final file. This is not a universal whole-operation atomicity guarantee, and hard-link support is not claimed. [ARCH] [DOC]
 - Completion is reported only after publication and exact final-path verification. `Open in Browser` rechecks the path and opens only an encoded local `file://` URI.
 - Stream HTTP 403 permits one fresh metadata/format resolution after a bounded, cancellation-aware wait; no more. Metadata 403 is not a stream retry. HTTP 429 has no application-level automatic recovery. yt-dlp's own bounded retry settings remain distinguishable from app policy.

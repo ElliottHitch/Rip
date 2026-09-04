@@ -96,18 +96,13 @@ public sealed record MediaCharacteristics(
     bool HasAudio,
     double? FrameRate = null);
 
-public sealed record MediaSource(Uri Address, long? LengthBytes = null, DateTimeOffset? ExpiresAt = null)
-{
-    public override string ToString() => "[media-source]";
-}
-
 public sealed record MediaPlan(
     DownloadRequest Request,
     MediaCharacteristics Characteristics,
-    MediaSource? VideoSource = null,
-    MediaSource? AudioSource = null,
     string? VideoFormatId = null,
     string? AudioFormatId = null,
+    long? VideoLengthBytes = null,
+    long? AudioLengthBytes = null,
     bool IsProgressive = false);
 
 public enum LocalMediaChannel

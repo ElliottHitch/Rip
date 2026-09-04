@@ -84,8 +84,7 @@ public sealed class ApplicationCompositionTests
 
         using var workspace = TestWorkspace.Create();
         var manifest = workspace.WriteManifest();
-        using var client = new HttpClient(new FixtureHttpHandler());
-        var composed = ApplicationComposition.Create(new InlineDispatcher(), manifest, client);
+        var composed = ApplicationComposition.Create(new InlineDispatcher(), manifest);
         var stagingRoot = composed.StagingRoot;
         try
         {
@@ -198,7 +197,8 @@ public sealed class ApplicationCompositionTests
             }
         }
 
-        private static string YtDlpScript() => $"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '2026.08.19\\n'; exit 0; fi\nprintf '%s' '{{\"title\":\"Fixture title\",\"duration\":1,\"formats\":[{{\"format_id\":\"video\",\"url\":\"https://fixture.invalid/video.mp4\",\"ext\":\"mp4\",\"vcodec\":\"avc1\",\"acodec\":\"none\",\"height\":720,\"width\":1280,\"fps\":30,\"tbr\":500}}]}}'";
+        private static string YtDlpScript() =>
+            $"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '2026.08.19\\n'; exit 0; fi\nformat=''\noutput=''\nwhile [ \"$#\" -gt 0 ]; do if [ \"$1\" = \"--format\" ]; then format=\"$2\"; shift 2; continue; fi; if [ \"$1\" = \"--output\" ]; then output=\"$2\"; shift 2; continue; fi; shift; done\nif [ -n \"$format\" ]; then printf 'fixture-input' > \"$output\"; exit 0; fi\nprintf '%s' '{{\"title\":\"Fixture title\",\"duration\":1,\"formats\":[{{\"format_id\":\"video\",\"url\":\"https://fixture.invalid/video.mp4\",\"ext\":\"mp4\",\"vcodec\":\"avc1\",\"acodec\":\"none\",\"height\":720,\"width\":1280,\"fps\":30,\"tbr\":500}}]}}'";
 
         private static string Hash(string path)
         {

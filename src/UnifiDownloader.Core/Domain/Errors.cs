@@ -10,6 +10,7 @@ public enum DownloadErrorCode
     AccessDenied,
     RateLimited,
     MissingTool,
+    TooLarge,
     MediaProcessingFailed,
     PublicationConflict,
     Cancelled,
@@ -142,6 +143,13 @@ public static class SafeDownloadErrors
         RetryAction.None,
         new RedactedDiagnosticToken("diag-application-unexpected"));
 
+    public static SafeDownloadError ProviderRefreshFailed() => SafeDownloadError.Create(
+        DownloadErrorCode.ProviderUnavailable,
+        DownloadStage.Resolving,
+        "The provider could not refresh the media stream.",
+        RetryAction.UserActionRequired,
+        new RedactedDiagnosticToken("diag-application-provider-refresh-failed"));
+
     public static SafeDownloadError InvalidMetadata() => SafeDownloadError.Create(
         DownloadErrorCode.InvalidRequest,
         DownloadStage.Metadata,
@@ -183,4 +191,11 @@ public static class SafeDownloadErrors
         "Download progress reporting failed.",
         RetryAction.None,
         new RedactedDiagnosticToken("diag-application-observer-failed"));
+
+    public static SafeDownloadError LocalStreamTooLarge() => SafeDownloadError.Create(
+        DownloadErrorCode.TooLarge,
+        DownloadStage.Downloading,
+        "The selected media stream exceeds the 5 GiB staging limit.",
+        RetryAction.UserActionRequired,
+        new RedactedDiagnosticToken("diag-local-stream-too-large"));
 }

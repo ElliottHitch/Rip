@@ -45,6 +45,60 @@ public sealed class DownloadPresentationTests
     }
 
     [Fact]
+    public async Task Try_again_is_exposed_only_for_retryable_failures_and_preserves_request_fields()
+    {
+        var model = ValidVideoModel();
+        var controller = Controller(model);
+        model.BeginRun();
+        var error = SafeDownloadError.Create(
+            DownloadErrorCode.AccessDenied,
+            DownloadStage.Downloading,
+            "The stream could not be accessed.",
+            RetryAction.RefreshStream,
+            new RedactedDiagnosticToken("diag-test-retry"));
+
+        Assert.True(controller.ApplyEvent(new DownloadFailed(Run, DownloadStage.Downloading, 1, error)));
+        Assert.True(model.CanRetry);
+        Assert.False(model.CanStart);
+        Assert.False(await controller.RetryAsync());
+        Assert.False(model.CanRetry);
+        Assert.False(model.CanStart);
+        Assert.Equal("https://example.invalid/watch?v=redacted", model.VideoUrl);
+        Assert.Equal("/safe/destination", model.OutputFolder);
+        Assert.Equal("video", model.FileStem);
+    }
+
+    [Fact]
+    public void User_action_required_failure_does_not_offer_try_again()
+    {
+        var model = ValidVideoModel();
+        var controller = Controller(model);
+        model.BeginRun();
+        var error = SafeDownloadError.Create(
+            DownloadErrorCode.TooLarge,
+            DownloadStage.Downloading,
+            "The selected stream is too large.",
+            RetryAction.UserActionRequired,
+            new RedactedDiagnosticToken("diag-test-too-large"));
+
+        Assert.True(controller.ApplyEvent(new DownloadFailed(Run, DownloadStage.Downloading, 1, error)));
+        Assert.False(model.CanRetry);
+    }
+
+    [Fact]
+    public void UniFi_compatibility_is_not_applied_to_audio_requests()
+    {
+        var model = ValidVideoModel();
+        model.SelectedOperation = DownloadOperation.Audio;
+        model.MakeUnifiCompatible = true;
+
+        Assert.True(model.TryBuildRequest(out var request));
+        Assert.False(request!.Output.UnifiCompatible);
+        Assert.Equal(OutputContainer.Matroska, request.Output.Container);
+        Assert.False(model.IsVideoOperation);
+    }
+
+    [Fact]
     public void Metadata_uses_safe_compatibility_output_and_disables_output_controls()
     {
         var model = ValidVideoModel();
@@ -257,8 +311,9 @@ public sealed class DownloadPresentationTests
             ValueTask.FromResult(new ProviderResult<MediaPlan>(new MediaPlan(
                 request,
                 new MediaCharacteristics(OutputContainer.Mp4, VideoCodec.H264, AudioCodec.Unknown, true, false, 30),
-                new MediaSource(new Uri("https://example.invalid/media"), 1),
-                null), null));
+                "video-format",
+                null,
+                1), null));
     }
 
     private sealed class FakeStager : ILocalStreamStager

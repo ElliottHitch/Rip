@@ -57,6 +57,7 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
     private string completionText = string.Empty;
     private string announcement = string.Empty;
     private VerifiedLocalMp4? publishedFile;
+    private RetryAction retryAction;
     private bool canOpenFolder;
     private string openFolderDisabledReason = "Native folder picking is unavailable until the window is ready; type a destination in the field above.";
     private readonly string browserSessionHelp = "Browser session access is optional and off by default. If enabled, the selected browser session is used only for this run. The app never asks for a password, exports cookies, automates login or CAPTCHA, uploads browser data, uses a remote browser bridge, rotates proxies, spoofs fingerprints or headers, or bypasses service restrictions.";
@@ -101,7 +102,10 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
 
     public bool IsTerminal => ScreenState is ScreenState.Completed or ScreenState.Cancelled or ScreenState.Failed;
     public bool CanStart => !IsBusy && !IsTerminal && !HasMissingCapability && IsFormValid;
+    public bool CanRetry => !IsBusy && ScreenState == ScreenState.Failed &&
+        retryAction is RetryAction.RefreshStream or RetryAction.RetryAfterDelay && IsFormValid;
     public bool CanCancel => IsBusy;
+    public bool IsVideoOperation => SelectedOperation == DownloadOperation.Video;
     public bool OutputControlsEnabled => SelectedOperation != DownloadOperation.Metadata && !IsBusy;
     public bool BrowserSelectionEnabled => UseBrowserSession && !IsBusy;
     public bool CanOpenInBrowser => IsTerminal && PublishedFile is not null && ScreenState == ScreenState.Completed;
@@ -203,15 +207,16 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
 
         try
         {
+            var compatibility = MakeUnifiCompatible && SelectedOperation == DownloadOperation.Video;
             var output = SelectedOperation == DownloadOperation.Metadata
                 ? new OutputOptions("metadata", "metadata", OutputContainer.Mp4)
                 : new OutputOptions(
                     OutputFolder.Trim(),
                     FileStem.Trim(),
-                    MakeUnifiCompatible ? OutputContainer.UnifiMp4 : SelectedContainer,
+                    compatibility ? OutputContainer.UnifiMp4 : SelectedContainer,
                     false,
                     FrameRateTarget,
-                    MakeUnifiCompatible);
+                    compatibility);
             request = new DownloadRequest(
                 new VideoReference(address),
                 SelectedOperation,
@@ -234,6 +239,7 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
         CompletionText = string.Empty;
         MetadataSummary = string.Empty;
         PublishedFile = null;
+        retryAction = RetryAction.None;
         ActivityLog.Clear();
         ScreenState = ScreenState.Validating;
         ProgressMode = ProgressMode.None;
@@ -275,6 +281,7 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
         }
         else if (downloadEvent is DownloadFailed failed)
         {
+            retryAction = failed.Error.Retry;
             ErrorMessage = SafeText(failed.Error.UserMessage, "The operation could not be completed.");
             CompleteTerminal(ScreenState.Failed, "Failed", ErrorMessage);
         }
@@ -295,9 +302,13 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
             MetadataSummary = FormatMetadata(result.Metadata);
         }
 
-        if (result.Error is not null && string.IsNullOrWhiteSpace(ErrorMessage))
+        if (result.Error is not null)
         {
-            ErrorMessage = SafeText(result.Error.UserMessage, "The operation could not be completed.");
+            retryAction = result.Error.Retry;
+            if (string.IsNullOrWhiteSpace(ErrorMessage))
+            {
+                ErrorMessage = SafeText(result.Error.UserMessage, "The operation could not be completed.");
+            }
         }
 
         if (IsTerminal)
@@ -321,6 +332,27 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
     {
         ErrorMessage = "The operation could not be completed. Check the environment and try again.";
         CompleteTerminal(ScreenState.Failed, "Failed", ErrorMessage);
+    }
+
+    internal void PrepareRetry()
+    {
+        if (!CanRetry) return;
+        IsBusy = false;
+        ScreenState = ScreenState.Idle;
+        ProgressMode = ProgressMode.None;
+        ProgressFraction = 0;
+        StageText = "Ready to retry";
+        ActivityText = string.Empty;
+        StatusText = "Ready to retry";
+        Announcement = "Ready to retry the request.";
+        ErrorMessage = string.Empty;
+        CompletionText = string.Empty;
+        MetadataSummary = string.Empty;
+        PublishedFile = null;
+        retryAction = RetryAction.None;
+        ActivityLog.Clear();
+        NotifyFormChanged();
+        Notify(nameof(IsTerminal), nameof(CanRetry), nameof(CanOpenInBrowser));
     }
 
     internal void SetCapabilities(IEnumerable<CapabilityStatus> statuses)
@@ -378,6 +410,7 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
         CompletionText = string.Empty;
         Announcement = string.Empty;
         PublishedFile = null;
+        retryAction = RetryAction.None;
         ActivityLog.Clear();
         NotifyFormChanged();
         Notify(nameof(IsTerminal), nameof(OutputControlsEnabled), nameof(BrowserSelectionEnabled), nameof(CanOpenInBrowser), nameof(CanChooseOutputFolder), nameof(FrameRateSelectionIndex));
@@ -395,7 +428,7 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
         UseBrowserSession = false;
         SelectedBrowser = null;
         NotifyFormChanged();
-        Notify(nameof(IsTerminal), nameof(OutputControlsEnabled), nameof(BrowserSelectionEnabled), nameof(CanOpenInBrowser), nameof(CanChooseOutputFolder));
+        Notify(nameof(IsTerminal), nameof(OutputControlsEnabled), nameof(BrowserSelectionEnabled), nameof(CanOpenInBrowser), nameof(CanChooseOutputFolder), nameof(CanRetry), nameof(IsVideoOperation));
     }
 
     private void AddActivity(DownloadStage stage, string text)
@@ -440,7 +473,7 @@ public sealed class DownloadViewModel : INotifyPropertyChanged
     private void NotifyFormChanged() => Notify(
         nameof(IsFormValid), nameof(CanStart), nameof(OutputControlsEnabled), nameof(BrowserSelectionEnabled),
         nameof(FrameRateSelectionIndex), nameof(OutputControlsHelpText), nameof(FrameRateHelpText),
-        nameof(FolderChooserHelpText), nameof(FolderPickerFallbackText), nameof(CanChooseOutputFolder), nameof(StartHelpText));
+        nameof(FolderChooserHelpText), nameof(FolderPickerFallbackText), nameof(CanChooseOutputFolder), nameof(StartHelpText), nameof(IsVideoOperation));
     private void Notify(params string[] names) { foreach (var name in names) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name)); }
     private bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     {

@@ -41,13 +41,6 @@ public sealed class SafetyTests
         Assert.Throws<ArgumentException>(() => new RedactedDiagnosticToken("cookie=COOKIE_SENTINEL"));
     }
 
-    [Fact]
-    public void Opaque_media_source_does_not_display_its_address()
-    {
-        var source = new MediaSource(new Uri("https://example.test/stream?signature=sentinel"));
-
-        Assert.Equal("[media-source]", source.ToString());
-    }
 
     [Fact]
     public void Progress_activity_and_process_diagnostics_are_redacted_at_the_boundary()

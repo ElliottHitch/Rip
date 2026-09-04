@@ -386,7 +386,7 @@ Use:
 Do not use:
 
 - URL-derived titles or paths before Core safe-filename normalization;
-- string interpolation of request objects, `VideoReference`, `MediaSource`, `ProcessSpec`, browser leases, exceptions, or output locations into labels;
+- string interpolation of request objects, `VideoReference`, media-plan details, `ProcessSpec`, browser leases, exceptions, or output locations into labels;
 - a “copy details” function that copies raw diagnostics;
 - tooltips that contain hidden values not present in the visible text;
 - automation IDs, test IDs, or accessibility descriptions derived from secrets or paths.

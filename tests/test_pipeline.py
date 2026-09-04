@@ -61,6 +61,7 @@ class FakeYoutubeDL:
     extracts = 0
     options_history = []
     downloads = []
+    formats = FORMATS
     download_failures = []
     metadata_failures = []
     metadata_type = None
@@ -85,12 +86,13 @@ class FakeYoutubeDL:
         return {
             "title": "Example",
             "duration": 1,
-            "formats": FORMATS,
+            "formats": type(self).formats,
             **({"_type": type(self).metadata_type} if type(self).metadata_type else {}),
         }
 
     def download(self, urls):
-        label = "video" if self.options["format"] == "video-old" else "audio"
+        format_id = self.options["format"]
+        label = "combined" if format_id == "18" else ("video" if format_id == "video-old" else "audio")
         type(self).downloads.append(label)
         path = self.options["outtmpl"].replace("%(ext)s", "mp4")
         with open(path, "wb") as output:
@@ -125,6 +127,7 @@ class PipelineTestCase(unittest.TestCase):
         FakeYoutubeDL.extracts = 0
         FakeYoutubeDL.options_history = []
         FakeYoutubeDL.downloads = []
+        FakeYoutubeDL.formats = FORMATS
         FakeYoutubeDL.download_failures = []
         FakeYoutubeDL.metadata_failures = []
         FakeYoutubeDL.metadata_type = None
@@ -182,6 +185,26 @@ class PipelineTestCase(unittest.TestCase):
         self.downloader._download_media("https://example.test/video", self.worker_temp.name)
         self.assertTrue(FakeYoutubeDL.options_history)
         self.assertTrue(all("cookiesfrombrowser" not in options for options in FakeYoutubeDL.options_history))
+
+    def test_progressive_fallback_selects_and_downloads_one_combined_format(self):
+        FakeYoutubeDL.formats = [
+            {
+                "format_id": "18",
+                "vcodec": "avc1",
+                "acodec": "mp4a.40.2",
+                "height": 720,
+                "fps": 30,
+                "tbr": 1800,
+            }
+        ]
+
+        result = self.downloader._download_media("https://example.test/video", self.worker_temp.name)
+
+        self.assertEqual(FakeYoutubeDL.downloads, ["combined"])
+        self.assertEqual(result[0], result[1])
+        self.assertEqual(FakeYoutubeDL.options_history[-1]["format"], "18")
+        self.assertEqual(FakeYoutubeDL.options_history[-1]["max_filesize"], app.MAX_FILE_BYTES)
+        self.assertTrue(any("muxed video and audio" in call.args[0] for call in self.downloader._append_log.call_args_list))
 
     def test_environment_probe_reports_ejs_and_deno_readiness_without_network(self):
         with patch.object(app.importlib.util, "find_spec", return_value=object()), patch.object(
