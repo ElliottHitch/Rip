@@ -2,6 +2,8 @@
 
 Rip is a Windows desktop app for downloading YouTube videos at the quality you choose. It downloads video and audio separately, then combines them into one file. That gives you access to higher resolutions, including 4K, when the source provides them.
 
+![Rip downloads video and audio separately, then combines them into one file. Standard mode preserves the original codecs in MKV; UniFi mode converts to H.264 and AAC in MP4.](docs/assets/pipeline.svg)
+
 ## Download a video
 
 1. Paste a video link and choose where to save it.
