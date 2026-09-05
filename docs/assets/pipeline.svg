@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="800" height="300" viewBox="0 0 800 300" fill="none" role="img" aria-labelledby="title description">
   <title id="title">Separate streams. One file.</title>
-  <desc id="description">Rip downloads video at your chosen quality and the best available audio separately, then combines them into one file. Standard mode keeps the original codecs in MKV. Optional UniFi mode converts to MP4 with H.264 video and AAC audio.</desc>
+  <desc id="description">yt-dlp uses Deno to extract YouTube information and downloads video and audio separately. FFmpeg combines the streams, preserving original codecs in standard MKV mode or converting to H.264 and AAC in optional UniFi MP4 mode. FFprobe checks the result before Rip saves the file.</desc>
   <rect width="800" height="300" rx="12" fill="#F8F9F9"/>
   <g stroke="#253337" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
     <rect x="49" y="61" width="28" height="22" rx="3"/>
@@ -17,6 +17,7 @@
     <path d="m577 121 10 6-10 6Z" fill="#D94B29" stroke="#D94B29"/>
   </g>
   <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="48" y="34" fill="#253337" font-size="16" font-weight="600">yt-dlp + Deno</text>
     <g fill="#253337" font-size="21" font-weight="600">
       <text x="96" y="78">Video</text>
       <text x="96" y="164">Audio</text>
@@ -25,8 +26,10 @@
     <g fill="#56656A" font-size="15">
       <text x="96" y="101">Your chosen quality</text>
       <text x="96" y="187">Best available</text>
-      <text x="448" y="107" text-anchor="middle">Combine</text>
+      <text x="448" y="148" text-anchor="middle">Combine / convert</text>
+      <text x="619" y="153">FFprobe check</text>
     </g>
+    <text x="448" y="107" text-anchor="middle" fill="#253337" font-size="16" font-weight="600">FFmpeg</text>
     <path d="M48 217h704" stroke="#DDE2E3"/>
     <g fill="#253337" font-size="16" font-weight="600">
       <text x="48" y="247">Standard · MKV</text>

@@ -2,7 +2,7 @@
 
 Rip is a Windows desktop app for downloading YouTube videos at the quality you choose. It downloads video and audio separately, then combines them into one file. That gives you access to higher resolutions, including 4K, when the source provides them.
 
-![Rip downloads video and audio separately, then combines them into one file. Standard mode preserves the original codecs in MKV; UniFi mode converts to H.264 and AAC in MP4.](docs/assets/pipeline.svg)
+![yt-dlp with Deno downloads separate video and audio streams. FFmpeg combines or converts them, then FFprobe checks the result before Rip saves one file.](docs/assets/pipeline.svg)
 
 ## Download a video
 
@@ -15,6 +15,17 @@ Standard mode keeps the original codecs and frame rate in an MKV file. A selecte
 Enable **UniFi Connect compatibility** to convert to MP4 with H.264 video and AAC-LC audio for Display Cast and Cast Pro. Conversion takes longer.
 
 You can also download audio only. Rip names files after the video title and never overwrites an existing file.
+
+## Under the hood
+
+| Tool | What it does |
+| --- | --- |
+| yt-dlp | Reads video metadata and available formats, then downloads the selected streams. |
+| Deno | Provides the JavaScript runtime yt-dlp uses for YouTube extraction. |
+| FFmpeg | Combines streams without re-encoding in standard mode. UniFi mode uses its `libx264` and AAC encoders to produce H.264 video and AAC-LC audio. |
+| FFprobe | Inspects the output's streams, container, duration and resolution, plus UniFi requirements, before Rip saves it. |
+
+Rip selects formats for your quality setting and coordinates these tools. Their pinned versions and download sources are in the [tool catalog](src/Rip.App/Setup/tool-bootstrap.json).
 
 ## Install and update
 
