@@ -7,7 +7,7 @@
 
 ## Outcome
 
-At the time of this decision, Phase 1 could begin immediately under ADR-0001 through ADR-0004. It created a buildable, framework-independent `UnifiDownloader.Core` and deterministic tests; it did not create a runnable target product. Phase 1 is complete. The later Phase 2 work now provides the runnable Avalonia shell described in `../phase2-app-shell-implementation.md`.
+At the time of this decision, Phase 1 could begin immediately under ADR-0001 through ADR-0004. It created a buildable, framework-independent `Rip.Core` and deterministic tests; it did not create a runnable target product. Phase 1 is complete. The later Phase 2 work now provides the runnable Avalonia shell described in `../phase2-app-shell-implementation.md`.
 
 ## In scope
 

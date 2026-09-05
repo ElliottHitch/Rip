@@ -13,9 +13,9 @@ The product must leave Python GUI technology behind while preserving the tested 
 
 Build the target in C# on .NET 10 LTS (`net10.0`) with a thin Avalonia 12.x presentation shell. The current implementation pins the .NET SDK to `10.0.400` in `global.json` and Avalonia to `12.1.2` in `Directory.Packages.props`. The target is:
 
-- `UnifiDownloader.Core`: pure domain/application records, policies, events, ports, and deterministic tests.
-- `UnifiDownloader.Infrastructure`: explicit yt-dlp, FFmpeg, filesystem, browser-session, local-opener, environment, process, and redacted-observer adapters.
-- `UnifiDownloader.App`: Avalonia shell and the manual composition root.
+- `Rip.Core`: pure domain/application records, policies, events, ports, and deterministic tests.
+- `Rip.Infrastructure`: explicit yt-dlp, FFmpeg, filesystem, browser-session, local-opener, environment, process, and redacted-observer adapters.
+- `Rip.App`: Avalonia shell and the manual composition root.
 - Separate deterministic tests for Core, adapters, application orchestration, and presentation.
 
 Dependency direction is one-way: App/presentation depends on Core; Infrastructure depends on Core ports and implements them; the composition root selects concrete adapters. Core never references Avalonia, any UI toolkit, yt-dlp, FFmpeg, process APIs, browser APIs, network APIs, or concrete filesystem APIs. There is no DI container; composition is explicit and manual. Views never access provider, session, network, or process handles directly.

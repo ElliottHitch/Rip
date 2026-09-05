@@ -5,7 +5,7 @@ The local package workflow proves only that a self-contained .NET application ar
 Not proved by this workflow:
 
 - Native startup, desktop integration, accessibility, filesystem behavior, or live-media behavior on Windows x64 or Linux x64. The current verification host is Linux ARM64 without a desktop display.
-- A working provider/media environment. yt-dlp, Deno, FFmpeg, and FFprobe are external or not qualified. The application remains fail-closed until a local unifi-downloader.tools.json manifest contains verified paths, exact versions, approved HTTPS repositories, and matching trusted SHA-256 expectations.
+- A working provider/media environment. yt-dlp, Deno, FFmpeg, and FFprobe are external or not qualified. The application remains fail-closed until a local rip.tools.json manifest contains verified paths, exact versions, approved HTTPS repositories, and matching trusted SHA-256 expectations.
 - Semantic MP4/Unifi compliance, browser-session behavior, update/rollback exercise, installer ownership, or clean-install behavior on every supported OS.
 - Signing, notarization, publication, or an automatic updater. No signing credentials are read or required.
 

@@ -27,9 +27,9 @@ The recommendation preserves the product/security contract: one YouTube video pe
 
 ### Current implementation status
 
-The Phase 2 shell now exists in `src/UnifiDownloader.App`. `Program.Main` starts the Avalonia desktop lifetime for ordinary launches, while `--deterministic-smoke` exits before Avalonia and Infrastructure initialization. The shell has one window with Request, Output, Browser session, Environment, Run controls, Activity, Completion, and status regions. Its typed form supports `Metadata`, `Video`, and `Audio`, one off-by-default `Make output UniFi-compatible` toggle for video runs, default-off per-run browser consent for `Chromium`, `Chrome`, `Edge`, or `Firefox`, safe terminal states, and a separate verified-local-media `Open in Browser` action.
+The Phase 2 shell now exists in `src/Rip.App`. `Program.Main` starts the Avalonia desktop lifetime for ordinary launches, while `--deterministic-smoke` exits before Avalonia and Infrastructure initialization. The shell has one window with Request, Output, Browser session, Environment, Run controls, Activity, Completion, and status regions. Its typed form supports `Metadata`, `Video`, and `Audio`, one off-by-default `Make output UniFi-compatible` toggle for video runs, default-off per-run browser consent for `Chromium`, `Chrome`, `Edge`, or `Firefox`, safe terminal states, and a separate verified-local-media `Open in Browser` action.
 
-The current App composition loads `unifi-downloader.tools.json` from beside the application binary, or from `UNIFI_DOWNLOADER_TOOL_MANIFEST` when set. The manifest requires schema version 1, HTTPS allow-listed repositories, separate trusted expectations, verified SHA-256 values, and a matching execution RID. Missing or invalid configuration reports safe unavailable capability results and keeps Start disabled. The shell does not download or discover tools remotely. The current `Choose Output Folder` action is wired through Avalonia's `StorageProvider` after `Window.Opened`; it allows one folder and returns only a safe local filesystem path, while the editable output field remains the fallback. The shell gate does not claim live provider or media success, native controls, ARM64 or native Wayland support, packaging, signing, updates, rollback exercise, or release readiness. See [the implementation handoff](phase2-app-shell-implementation.md) and [the tool manifest guide](../tool-manifest.md) for the exact boundary and deferred gates.
+The current App composition loads `rip.tools.json` from beside the application binary, or from `RIP_TOOL_MANIFEST` when set. The manifest requires schema version 1, HTTPS allow-listed repositories, separate trusted expectations, verified SHA-256 values, and a matching execution RID. Missing or invalid configuration reports safe unavailable capability results and keeps Start disabled. The shell does not download or discover tools remotely. The current `Choose Output Folder` action is wired through Avalonia's `StorageProvider` after `Window.Opened`; it allows one folder and returns only a safe local filesystem path, while the editable output field remains the fallback. The shell gate does not claim live provider or media success, native controls, ARM64 or native Wayland support, packaging, signing, updates, rollback exercise, or release readiness. See [the implementation handoff](phase2-app-shell-implementation.md) and [the tool manifest guide](../tool-manifest.md) for the exact boundary and deferred gates.
 
 ### Weighted stack decision matrix
 
@@ -168,7 +168,7 @@ The arrow direction is dependency direction: domain imports no UI, process, yt-d
 ### Proposed module tree
 
 ```text
-src/UnifiDownloader.Core/
+src/Rip.Core/
   Domain/
     DownloadRequest.cs          // immutable request and browser-session value objects
     MediaModels.cs              // metadata, stream, media-plan, output records
@@ -180,7 +180,7 @@ src/UnifiDownloader.Core/
     Events.cs                   // typed event definitions and redaction boundary
     Cancellation.cs             // run identity and cancellation contract
     Ports.cs                    // explicit provider/media/FS/browser/diagnostics interfaces
-src/UnifiDownloader.Infrastructure/
+src/Rip.Infrastructure/
   Composition.cs                // concrete wiring and capability policy
   Adapters/
     YtDlpExecutableAdapter.cs   // pinned executable, argv, allowlisted output, classification
@@ -190,7 +190,7 @@ src/UnifiDownloader.Infrastructure/
     LocalFileOpener.cs          // verified local media only
     EnvironmentDiagnostics.cs   // PATH/runtime/process capability checks
     RedactedObserver.cs         // safe event/log sink
-src/UnifiDownloader.App/
+src/Rip.App/
   App.axaml                    // presentation resources only
   Views/DownloadView.axaml     // thin Avalonia controls and labels
   ViewModels/DownloadViewModel.cs
@@ -442,7 +442,7 @@ Acceptance: `python -m unittest discover -s tests -v`, `python -m py_compile app
 
 ### Phase 1: .NET domain policy and typed contracts
 
-Add only the `UnifiDownloader.Core` contract/policy layer and deterministic tests, with optional solution scaffolding for the later `UnifiDownloader.Infrastructure` and `UnifiDownloader.App` projects. Define immutable request/output/browser-session records, safe error codes, lifecycle events, run identity/generation, cancellation semantics, provider/media/filesystem/browser/diagnostic/observer/process ports, and pure format/FPS/passthrough/filename/collision/output/retry/publication policies. No Avalonia reference, concrete process/filesystem/network/yt-dlp/FFmpeg implementation, launcher change, compatibility bridge, or package metadata belongs in Phase 1.
+Add only the `Rip.Core` contract/policy layer and deterministic tests, with optional solution scaffolding for the later `Rip.Infrastructure` and `Rip.App` projects. Define immutable request/output/browser-session records, safe error codes, lifecycle events, run identity/generation, cancellation semantics, provider/media/filesystem/browser/diagnostic/observer/process ports, and pure format/FPS/passthrough/filename/collision/output/retry/publication policies. No Avalonia reference, concrete process/filesystem/network/yt-dlp/FFmpeg implementation, launcher change, compatibility bridge, or package metadata belongs in Phase 1.
 
 Acceptance: branch-complete policy tests, old 39 tests unchanged and passing, exact dependency/SDK/package pinning, and no domain import of Avalonia, yt-dlp, FFmpeg, subprocess implementation, browser, network, or concrete filesystem. At this phase, rollback meant deletion of the new Core/scaffolding and continued use of `app.py`. The later shell implementation is documented in the current implementation status above.
 

@@ -2,7 +2,7 @@
 
 Status: implementation-ready design contract; documentation only
 
-Scope: `UnifiDownloader.App` presentation shell over the typed `UnifiDownloader.Core`
+Scope: `Rip.App` presentation shell over the typed `Rip.Core`
 
 This document defines the single-window UX, accessibility contract, safe state projection, and validation gates for Phase 2. It does not add Avalonia code, dependencies, adapters, network behavior, browser access, credentials, packaging, launcher behavior, or release support. The legacy `app.py` remains the runnable rollback reference until the separately approved cutover gates pass.
 

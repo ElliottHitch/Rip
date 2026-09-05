@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify an unpacked YouTube Downloader package without contacting a provider."""
+"""Verify an unpacked Rip package without contacting a provider."""
 from __future__ import annotations
 
 import hashlib
@@ -28,7 +28,7 @@ def host_rid() -> str | None:
 
 
 def verify(package: Path) -> None:
-    required = ("PROVENANCE.json", "tool-provenance.json", "unifi-downloader.tools.example.json", "SBOM.spdx.json", "NOTICE.md", "RELEASE-GATES.md", "SHA256SUMS")
+    required = ("PROVENANCE.json", "tool-provenance.json", "rip.tools.example.json", "SBOM.spdx.json", "NOTICE.md", "RELEASE-GATES.md", "SHA256SUMS")
     missing = [name for name in required if not (package / name).is_file()]
     if missing:
         raise RuntimeError("missing package files: " + ", ".join(missing))
@@ -49,7 +49,7 @@ def verify(package: Path) -> None:
         path = package / relative
         if not path.is_file() or digest(path).lower() != expected.lower():
             raise RuntimeError(f"checksum mismatch: {relative}")
-    app_name = "UnifiDownloader.App.exe" if rid.startswith("win-") else "UnifiDownloader.App"
+    app_name = "Rip.exe" if rid.startswith("win-") else "Rip"
     app = package / app_name
     if not app.is_file():
         raise RuntimeError(f"missing launcher: {app_name}")

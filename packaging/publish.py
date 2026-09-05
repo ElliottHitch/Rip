@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a self-contained, unsigned YouTube Downloader directory artifact.
+"""Build a self-contained, unsigned Rip directory artifact.
 
 The workflow deliberately packages only the .NET application. yt-dlp, Deno,
 FFmpeg, and FFprobe remain explicit local prerequisites and are never fetched.
@@ -23,7 +23,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 RIDS = ("linux-arm64", "linux-x64", "win-x64")
-APP_PROJECT = Path("src/UnifiDownloader.App/UnifiDownloader.App.csproj")
+APP_PROJECT = Path("src/Rip.App/Rip.App.csproj")
 TOOL_KEYS = ("yt-dlp", "deno", "ffmpeg", "ffprobe")
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -182,11 +182,11 @@ def example_manifest(rid: str, tool_data: dict[str, dict]) -> dict:
 
 
 def sbom(version: str, rid: str, sdk: str, pins: dict[str, str]) -> dict:
-    packages = [{"SPDXID": "SPDXRef-Application", "name": "YouTube Downloader", "versionInfo": version, "downloadLocation": "NOASSERTION", "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION"}]
+    packages = [{"SPDXID": "SPDXRef-Application", "name": "Rip", "versionInfo": version, "downloadLocation": "NOASSERTION", "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION"}]
     for name, package_version in sorted(pins.items()):
         packages.append({"SPDXID": "SPDXRef-" + re.sub(r"[^A-Za-z0-9.-]", "-", name), "name": name, "versionInfo": package_version, "downloadLocation": "NOASSERTION", "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION"})
     packages.append({"SPDXID": "SPDXRef-DotNet-SDK", "name": ".NET SDK", "versionInfo": sdk, "downloadLocation": "NOASSERTION", "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION"})
-    return {"spdxVersion": "SPDX-2.3", "dataLicense": "CC0-1.0", "SPDXID": "SPDXRef-DOCUMENT", "name": f"youtube-downloader-{version}-{rid}", "documentNamespace": f"https://example.invalid/youtube-downloader/provenance/{version}/{rid}", "creationInfo": {"created": "1970-01-01T00:00:00Z", "creators": ["Tool: YouTube Downloader packaging workflow"]}, "packages": packages}
+    return {"spdxVersion": "SPDX-2.3", "dataLicense": "CC0-1.0", "SPDXID": "SPDXRef-DOCUMENT", "name": f"Rip-{version}-{rid}", "documentNamespace": f"https://example.invalid/Rip/provenance/{version}/{rid}", "creationInfo": {"created": "1970-01-01T00:00:00Z", "creators": ["Tool: Rip packaging workflow"]}, "packages": packages}
 
 
 def archive_tar(source: Path, destination: Path) -> None:
@@ -240,11 +240,11 @@ def host_rid() -> str | None:
 
 
 def clean_install_check(package_dir: Path, rid: str, root: Path) -> None:
-    app_name = "UnifiDownloader.App.exe" if rid.startswith("win-") else "UnifiDownloader.App"
+    app_name = "Rip.exe" if rid.startswith("win-") else "Rip"
     app = package_dir / app_name
     if not app.is_file():
         raise PublishFailure(f"clean-install check did not find {app_name}")
-    with tempfile.TemporaryDirectory(prefix="unifi-downloader-install-") as temp:
+    with tempfile.TemporaryDirectory(prefix="rip-install-") as temp:
         clean = Path(temp) / package_dir.name
         shutil.copytree(package_dir, clean)
         copied = clean / app_name
@@ -288,7 +288,7 @@ def publish(root: Path, rid: str, configuration: str) -> Path:
         raise PublishFailure("dotnet was not found on PATH")
 
     output_root = root / "artifacts" / version / rid
-    package_dir = output_root / f"youtube-downloader-{rid}"
+    package_dir = output_root / f"Rip-{rid}"
     if output_root.exists():
         shutil.rmtree(output_root)
     package_dir.mkdir(parents=True)
@@ -304,7 +304,7 @@ def publish(root: Path, rid: str, configuration: str) -> Path:
     dirty = bool(git_value(root, "status", "--porcelain", "--untracked-files=no", fallback=""))
     provenance = {
         "schemaVersion": 1,
-        "application": {"name": "YouTube Downloader", "version": version, "targetRid": rid, "artifactType": "self-contained-directory", "sourceRevision": revision, "sourceDirty": dirty, "sourceTreeDigest": source_tree_digest(root)},
+        "application": {"name": "Rip", "version": version, "targetRid": rid, "artifactType": "self-contained-directory", "sourceRevision": revision, "sourceDirty": dirty, "sourceTreeDigest": source_tree_digest(root)},
         "build": {"sdkVersion": sdk, "dependencyPins": pins, "configuration": configuration, "restore": "locked", "selfContained": True, "publishSingleFile": False, "sourceDateEpoch": 0, "commandIntent": "dotnet publish --configuration Release --runtime <rid> --self-contained true --no-restore"},
         "tools": tools,
         "toolManifestSource": "packaging/tool-provenance.json",
@@ -312,14 +312,14 @@ def publish(root: Path, rid: str, configuration: str) -> Path:
     }
     write_json(package_dir / "PROVENANCE.json", provenance)
     write_json(package_dir / "tool-provenance.json", tool_manifest)
-    write_json(package_dir / "unifi-downloader.tools.example.json", example_manifest(rid, tools))
+    write_json(package_dir / "rip.tools.example.json", example_manifest(rid, tools))
     write_json(package_dir / "SBOM.spdx.json", sbom(version, rid, sdk, pins))
     for filename in ("NOTICE.md", "RELEASE-GATES.md"):
         shutil.copy2(root / "packaging" / filename, package_dir / filename)
     write_checksums(package_dir, package_dir / "SHA256SUMS")
     clean_install_check(package_dir, rid, root)
 
-    archive = output_root / (f"youtube-downloader-{version}-{rid}.zip" if rid.startswith("win-") else f"youtube-downloader-{version}-{rid}.tar.gz")
+    archive = output_root / (f"Rip-{version}-{rid}.zip" if rid.startswith("win-") else f"Rip-{version}-{rid}.tar.gz")
     if rid.startswith("win-"):
         archive_zip(package_dir, archive)
     else:
@@ -341,7 +341,7 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     try:
         output = publish(root, args.rid, args.configuration)
-        verify = [sys.executable, str(root / "packaging" / "verify.py"), str(output / f"youtube-downloader-{args.rid}")]
+        verify = [sys.executable, str(root / "packaging" / "verify.py"), str(output / f"Rip-{args.rid}")]
         run_checked(verify, root)
         return 0
     except (PublishFailure, OSError, json.JSONDecodeError, ElementTree.ParseError) as failure:

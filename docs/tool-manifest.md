@@ -2,7 +2,7 @@
 
 The Avalonia app does not download or discover runtime tools. Before a media run, it validates an operator-supplied manifest for yt-dlp, Deno, FFmpeg, and FFprobe. A missing, malformed, unverified, hash-mismatched, or wrong-RID entry leaves that capability unavailable and keeps Start disabled.
 
-The manifest is named `unifi-downloader.tools.json`. By default, the app reads it beside the application binary. Set `UNIFI_DOWNLOADER_TOOL_MANIFEST` to select another manifest. Use an absolute path for this override so the selected file is unambiguous. Relative executable paths in the manifest resolve from the manifest directory.
+The manifest is named `rip.tools.json`. By default, the app reads it beside the application binary. Set `RIP_TOOL_MANIFEST` to select another manifest. Use an absolute path for this override so the selected file is unambiguous. Relative executable paths in the manifest resolve from the manifest directory.
 
 This file is configuration, not proof of provenance. Keep the source release page, downloaded asset name, version, target RID, release checksum, manifest checksum, API checksum, and verification record in the release evidence for the same artifact. Do not put credentials, cookies, signed URLs, private repositories, or profile paths in the manifest or its evidence.
 
@@ -56,7 +56,7 @@ Create a manifest from approved artifacts
    ```
 
 4. Compare the computed digest with the official release digest and record both values, the source release, verifier, date, executable filename, and target RID. Do not mark a file verified when the comparison is unavailable.
-5. Write the manifest with the same target RID, exact versions, source repositories, and digests in both maps. Keep the manifest beside the app or set `UNIFI_DOWNLOADER_TOOL_MANIFEST` to its path.
+5. Write the manifest with the same target RID, exact versions, source repositories, and digests in both maps. Keep the manifest beside the app or set `RIP_TOOL_MANIFEST` to its path.
 6. Start the app and select `Test Environment`. It must report `Available` for yt-dlp, Deno, FFmpeg, FFprobe, and Runtime before Start becomes available. A successful version probe proves local discovery and validation only. It does not prove live service access or media compatibility.
 
 The loader accepts JSON only. Comments, trailing commas, an unknown schema version, a missing repository list, a missing expectations map, duplicate tool keys, a mismatched RID, a non-HTTPS repository, or an invalid path fail closed. The validator also checks that the executable is a regular file, executable on Unix, present, and byte-for-byte equal to the trusted SHA-256 value.

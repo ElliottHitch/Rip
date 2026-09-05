@@ -6,6 +6,7 @@
     <NuGetAudit>true</NuGetAudit>
   </PropertyGroup>
   <ItemGroup>
+    <PackageVersion Include="Velopack" Version="1.2.0" />
     <PackageVersion Include="xunit.v3.mtp-v2" Version="4.0.0" />
     <PackageVersion Include="Avalonia" Version="12.1.2" />
     <PackageVersion Include="Avalonia.Desktop" Version="12.1.2" />
