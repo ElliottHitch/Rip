@@ -16,7 +16,7 @@ You can also download audio only. Rip names files after the video title and neve
 
 ## Install and update
 
-The Windows installer is built, but the first public release is still pending. Installers will be available on the [releases page](https://github.com/ElliottHitch/Rip/releases).
+Download `Rip-win-Setup.exe` from the [releases page](https://github.com/ElliottHitch/Rip/releases/latest).
 
 `Rip-win-Setup.exe` creates desktop and Start menu shortcuts. First launch downloads and verifies the required media tools. Python is not required. The installer is currently unsigned.
 
