@@ -311,8 +311,8 @@ public static class ToolManifestLoader
 }
 
 /// <summary>
-/// Manual production composition root. Missing or invalid local configuration remains a safe,
-/// non-runnable composition; no tool is downloaded or discovered remotely.
+/// Composes the application from local tool configuration. First-launch setup runs before this
+/// boundary; missing or invalid configuration keeps downloads disabled.
 /// </summary>
 public static class ApplicationComposition
 {
@@ -340,7 +340,7 @@ public static class ApplicationComposition
                 denoPath,
                 root);
             var provider = new YtDlpVideoProvider((BoundedProcessExecutor)infrastructure.ProcessExecutor, denoPath);
-            var processor = new FfmpegStagedMediaProcessor(
+            var processor = new StagedFfmpegProcessor(
                 publication.Ffmpeg,
                 stager,
                 new FfmpegStageTarget(root));

@@ -8,7 +8,7 @@ namespace Rip.Infrastructure;
 /// Resolves only handles issued by <see cref="LocalStreamStager"/> and delegates to the
 /// accepted path-only FFmpeg adapter. No caller-supplied output path is accepted.
 /// </summary>
-public class StagedFfmpegProcessor : IStagedMediaProcessor
+public sealed class StagedFfmpegProcessor : IStagedMediaProcessor
 {
     private readonly FfmpegProcessAdapter adapter;
     private readonly LocalStreamStager stager;
@@ -107,28 +107,4 @@ public class StagedFfmpegProcessor : IStagedMediaProcessor
     }
 
     private static ProviderResult<T> Failure<T>(SafeDownloadError error) => new(default, error);
-}
-
-/// <summary>Compatibility name for the staged processing bridge.</summary>
-public sealed class StagedFfmpegProcessorBridge : StagedFfmpegProcessor
-{
-    public StagedFfmpegProcessorBridge(
-        FfmpegProcessAdapter adapter,
-        LocalStreamStager stager,
-        FfmpegStageTarget stageTarget)
-        : base(adapter, stager, stageTarget)
-    {
-    }
-}
-
-/// <summary>Transport-neutral name for the same Infrastructure processing seam.</summary>
-public sealed class FfmpegStagedMediaProcessor : StagedFfmpegProcessor
-{
-    public FfmpegStagedMediaProcessor(
-        FfmpegProcessAdapter adapter,
-        LocalStreamStager stager,
-        FfmpegStageTarget stageTarget)
-        : base(adapter, stager, stageTarget)
-    {
-    }
 }

@@ -195,7 +195,7 @@ public static class SafeDownloadErrors
     public static SafeDownloadError LocalStreamTooLarge() => SafeDownloadError.Create(
         DownloadErrorCode.TooLarge,
         DownloadStage.Downloading,
-        "The selected media stream exceeds the 5 GiB staging limit.",
+        "The selected media stream exceeds the configured staging size limit.",
         RetryAction.UserActionRequired,
         new RedactedDiagnosticToken("diag-local-stream-too-large"));
 }

@@ -1,13 +1,13 @@
-# Rip packaging
+# Windows packaging
 
-The Windows installer/update pipeline is `windows.ps1`, invoked by `.github/workflows/release.yml`.
+With the pinned .NET SDK on PATH, run:
 
 ```powershell
 ./packaging/windows.ps1 -Version 1.0.0
 ```
 
-It uses locked .NET dependencies, publishes a self-contained Windows x64 application, and packs Rip-win-Setup.exe plus its update feed with pinned Velopack 1.2.0. Installation creates desktop and Start menu shortcuts. Unsigned artifacts go to artifacts/windows/releases.
+The script restores locked dependencies, publishes a self-contained Windows x64 app, runs its startup smoke check, and builds the installer with Velopack. Each version gets its own directory under `artifacts/windows/<version>`, with `publish` and `releases` subdirectories.
 
-The standard-library `publish.py` / `verify.py` scripts and shell wrappers remain for existing directory-package experiments on Linux and other RIDs. They package the same Rip application and are outside the Windows automatic release path. Their historical provenance/release-gate records do not describe the Windows installer.
+`verify-windows.ps1` checks every release file's SHA-256 digest and verifies that the update feed names the correct package, version, size, and hash. Run it separately with `-Directory <release-directory> -Version <version>`.
 
-See [the release runbook](../docs/release-runbook.md).
+The script does not install, upload, or sign the result. The [release workflow](../.github/workflows/release.yml) publishes only after its build and test jobs pass. See [the release runbook](../docs/release-runbook.md).

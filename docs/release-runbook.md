@@ -2,13 +2,13 @@
 
 ## Automatic releases
 
-`.github/workflows/release.yml` runs on pull requests, pushes to `main`, and manual dispatch. Linux runs the complete deterministic suite. Windows builds a self-contained application, installer, and update feed, then runs presentation and Core tests. Only successful main-branch runs publish a GitHub release. The workflow uses GITHUB_TOKEN with contents write permission in the Windows job.
+`.github/workflows/release.yml` runs on pull requests, pushes to `main`, and manual dispatch. Linux runs the complete deterministic suite. Windows builds and verifies the installer and update feed, then runs presentation and Core tests. A separate release job publishes successful main-branch builds. Only that job has repository write permission. Build jobs do not retain Git credentials, and Actions dependencies are pinned to commit hashes.
 
-Versions are `1.<GITHUB_RUN_NUMBER>.<GITHUB_RUN_ATTEMPT>`. Do not reset the run counter or reuse versions. Reruns receive a higher patch version. Releases contain Rip-win-Setup.exe, the full update package, releases.win.json, checksums, and Velopack metadata. Delta generation is disabled initially.
+Versions are `1.<GITHUB_RUN_NUMBER>.<GITHUB_RUN_ATTEMPT>`. Do not reset the run counter or reuse versions. Reruns receive a higher patch version within that run. Rerunning an older workflow does not replace a newer release as GitHub's latest download. Releases contain Rip-win-Setup.exe, the full update package, releases.win.json, checksums, and Velopack metadata. Delta generation is disabled initially.
 
 ## Local installer
 
-Run `packaging/windows.ps1 -Version 1.0.0` with the pinned SDK on PATH. Output: artifacts/windows/releases. This builds only; it never uploads or signs artifacts. Install Rip-win-Setup.exe to test. The executable is Rip.exe, package ID Rip, and desktop/Start menu shortcuts are named Rip.
+Run `packaging/windows.ps1 -Version 1.0.0` with the pinned SDK on PATH. Output goes to `artifacts/windows/1.0.0/releases`. This builds only; it never uploads or signs artifacts. Install Rip-win-Setup.exe to test. The executable is Rip.exe, package ID Rip, and desktop/Start menu shortcuts are named Rip.
 
 The installed app checks https://github.com/ElliottHitch/Rip at startup. New releases are offered, not silently installed. Update and restart is blocked during downloads; failed checks/downloads are recoverable. Velopack validates package content and owns replacement/relaunch. Media and tools are stored outside current/ and retained during updates.
 
@@ -29,4 +29,4 @@ Windows signing is not configured. Artifacts are unsigned; do not describe them 
 
 ## Rollback
 
-Install a prior verified Rip release manually if needed. Keep media in its destination folder. There is no legacy Python fallback. Historical migration gates referring to retained Python code are superseded by the owner's single-app Rip cutover.
+Install a prior verified Rip release manually if needed. Keep media in its destination folder. There is no legacy Python fallback. Retired migration plans and packaging tools remain in Git history.
