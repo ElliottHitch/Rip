@@ -1,8 +1,7 @@
 # Rip
 
-Rip is a Windows desktop app for downloading YouTube videos at the quality you choose. It downloads video and audio separately, then combines them into one file. That gives you access to higher resolutions, including 4K, when the source provides them.
+Rip is a Windows desktop app for downloading YouTube videos at highest quality. It downloads video and audio separately, then combines them into one file. That gives you access to higher resolutions, including 4K, when the source provides them.
 
-Use Rip only for videos you are authorized to access and download, and follow applicable law and service terms. Rip does not bypass login, age, region, policy, rate, or other service restrictions.
 
 ![yt-dlp with Deno downloads separate video and audio streams. FFmpeg combines or converts them, then FFprobe checks the result before Rip saves one file.](docs/assets/pipeline.svg)
 
@@ -14,9 +13,11 @@ Use Rip only for videos you are authorized to access and download, and follow ap
 
 Standard mode keeps the original codecs and frame rate in an MKV file. A selected resolution sets the maximum quality; Rip never upscales smaller videos.
 
-Enable **UniFi Connect compatibility** to convert to MP4 with H.264 video and AAC-LC audio for Display Cast and Cast Pro. Conversion takes longer.
-
 You can also download audio only. Rip names files after the video title and never overwrites an existing file.
+
+## Digital Signage
+Enable **UniFi Connect compatibility** to convert to MP4 with H.264 video and AAC-LC audio for Display Cast and Cast Pro. Conversion takes longer.
+Support for UniFi Connect currently. 
 
 ## Browser-session access
 
