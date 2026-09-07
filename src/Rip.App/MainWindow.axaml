@@ -1,0 +1,110 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Rip.App.MainWindow"
+        Title="Rip" Icon="/Assets/Rip.ico" Width="820" Height="850" MinWidth="620" MinHeight="640">
+  <Window.Styles>
+    <Style Selector="TextBlock.help"><Setter Property="Opacity" Value="0.76" /><Setter Property="TextWrapping" Value="Wrap" /></Style>
+    <Style Selector="TextBlock.label"><Setter Property="FontWeight" Value="SemiBold" /></Style>
+    <Style Selector="ComboBox"><Setter Property="HorizontalAlignment" Value="Stretch" /></Style>
+    <Style Selector="Expander"><Setter Property="HorizontalAlignment" Value="Stretch" /></Style>
+  </Window.Styles>
+  <Grid RowDefinitions="Auto,*,Auto" Margin="28,24">
+    <StackPanel Spacing="6" Margin="0,0,0,24">
+      <StackPanel Orientation="Horizontal" Spacing="12">
+        <Image Source="/Assets/Rip.png" Width="44" Height="44" />
+        <TextBlock Text="Rip" FontSize="32" FontWeight="SemiBold" VerticalAlignment="Center" />
+      </StackPanel>
+      <TextBlock Classes="help" Text="Keep the quality. Download video and audio, then combine them losslessly." />
+    </StackPanel>
+    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+      <StackPanel Spacing="18" Margin="0,0,12,18">
+        <StackPanel Spacing="8" IsEnabled="{Binding !IsBusy}">
+          <TextBlock Classes="label" Text="Video URL" />
+          <TextBox Name="VideoUrlBox" AutomationProperties.Name="Video URL" Text="{Binding VideoUrl, Mode=TwoWay}" PlaceholderText="Paste a YouTube video link" />
+        </StackPanel>
+        <Grid ColumnDefinitions="*,20,*" IsEnabled="{Binding !IsBusy}">
+          <StackPanel Spacing="8">
+            <TextBlock Classes="label" Text="Download" />
+            <ComboBox AutomationProperties.Name="Operation" ItemsSource="{Binding Operations}" SelectedItem="{Binding SelectedOperation, Mode=TwoWay}" />
+          </StackPanel>
+          <StackPanel Grid.Column="2" Spacing="8" IsVisible="{Binding IsVideoOperation}">
+            <TextBlock Classes="label" Text="Video quality" />
+            <ComboBox AutomationProperties.Name="Video quality" ItemsSource="{Binding VideoQualities}" SelectedItem="{Binding SelectedQuality, Mode=TwoWay}" />
+          </StackPanel>
+        </Grid>
+        <TextBlock Classes="help" IsVisible="{Binding IsVideoOperation}" Text="Highest available includes 4K and above. A selected quality sets the maximum resolution; smaller sources stay at their original size." />
+        <StackPanel Spacing="8" IsEnabled="{Binding OutputControlsEnabled}">
+          <TextBlock Classes="label" Text="Save to" />
+          <Grid ColumnDefinitions="*,10,Auto">
+            <TextBox AutomationProperties.Name="Output folder" Text="{Binding OutputFolder, Mode=TwoWay}" />
+            <Button Grid.Column="2" Content="Browse…" AutomationProperties.Name="Choose Output Folder" IsEnabled="{Binding CanChooseOutputFolder}" Click="ChooseOutputFolderClicked" />
+          </Grid>
+        </StackPanel>
+        <StackPanel Spacing="4" IsVisible="{Binding IsVideoOperation}">
+          <CheckBox Content="UniFi Connect compatibility" AutomationProperties.Name="Make output UniFi-compatible" IsChecked="{Binding MakeUnifiCompatible, Mode=TwoWay}" IsEnabled="{Binding OutputControlsEnabled}" />
+          <TextBlock Classes="help" Text="For Display Cast / Cast Pro: MP4, H.264, AAC-LC, up to 4K at 24–30 fps and 40 Mbps. Conversion takes longer. Files over 5 GB are rejected." />
+          <TextBlock Classes="help" Text="Leave off to preserve original codecs and frame rate in an MKV file." />
+        </StackPanel>
+        <Expander Header="More options">
+          <StackPanel Spacing="12" Margin="0,12" IsEnabled="{Binding !IsBusy}">
+            <TextBlock Classes="label" Text="File name (without extension)" />
+            <TextBox AutomationProperties.Name="File stem" Text="{Binding FileStem, Mode=TwoWay}" IsEnabled="{Binding OutputControlsEnabled}" />
+            <TextBlock Classes="help" Text="Leave ‘download’ to use the video title. Existing files are never overwritten." />
+            <CheckBox Content="Use browser session for this download" AutomationProperties.Name="Use browser session" IsChecked="{Binding UseBrowserSession, Mode=TwoWay}" />
+            <ComboBox AutomationProperties.Name="Browser" ItemsSource="{Binding SupportedBrowsers}" SelectedItem="{Binding SelectedBrowser, Mode=TwoWay}" IsEnabled="{Binding BrowserSelectionEnabled}" />
+            <TextBlock Classes="help" Text="Optional: read the selected browser’s local session using yt-dlp. Access applies to this download and is cleared afterward. No cookie file is exported." />
+          </StackPanel>
+        </Expander>
+        <Expander Header="Tools and diagnostics">
+          <StackPanel Spacing="12" Margin="0,12">
+            <ItemsControl ItemsSource="{Binding Capabilities}" AutomationProperties.Name="Environment capability summary">
+              <ItemsControl.ItemTemplate><DataTemplate>
+                <Grid ColumnDefinitions="90,100,*" Margin="0,4">
+                  <TextBlock Text="{Binding Category}" FontWeight="SemiBold" />
+                  <TextBlock Grid.Column="1" Text="{Binding Status}" />
+                  <TextBlock Grid.Column="2" Classes="help" Text="{Binding Description}" />
+                </Grid>
+              </DataTemplate></ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Button Content="Check tools" AutomationProperties.Name="Test Environment" IsEnabled="{Binding !IsBusy}" Click="TestEnvironmentClicked" />
+            <ListBox ItemsSource="{Binding ActivityLog}" MinHeight="80" MaxHeight="180" AutomationProperties.Name="Activity log">
+              <ListBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Text}" TextWrapping="Wrap" /></DataTemplate></ListBox.ItemTemplate>
+            </ListBox>
+          </StackPanel>
+        </Expander>
+        <Expander Header="About Rip &amp; updates">
+          <StackPanel Spacing="12" Margin="0,12">
+            <TextBlock Classes="help" Text="{Binding Updates.Status}" />
+            <Button Content="Check for updates" IsEnabled="{Binding Updates.CanCheck}" Click="CheckUpdatesClicked" />
+          </StackPanel>
+        </Expander>
+      </StackPanel>
+    </ScrollViewer>
+    <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}" Padding="0,18,0,0">
+      <StackPanel Spacing="10">
+        <Border IsVisible="{Binding Updates.HasUpdate}" Background="#242E33" CornerRadius="6" Padding="12">
+          <StackPanel Spacing="8">
+            <TextBlock Text="{Binding Updates.Status}" Foreground="White" TextWrapping="Wrap" />
+            <Button Content="Update and restart" IsEnabled="{Binding Updates.CanInstall}" Click="InstallUpdateClicked" />
+            <TextBlock Text="Finish or cancel the current download before updating." IsVisible="{Binding IsBusy}" Foreground="White" TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+        <TextBlock Text="{Binding StageText}" FontSize="18" FontWeight="SemiBold" AutomationProperties.Name="Current stage" />
+        <TextBlock Text="{Binding ActivityText}" TextWrapping="Wrap" IsVisible="{Binding IsBusy}" />
+        <ProgressBar Minimum="0" Maximum="1" Value="{Binding ProgressFraction}" IsVisible="{Binding HasProgress}" IsIndeterminate="{Binding IsProgressIndeterminate}" Height="6" AutomationProperties.Name="Download progress" />
+        <TextBlock Text="{Binding StartHelpText}" Classes="help" IsVisible="{Binding !IsTerminal}" />
+        <TextBlock Text="{Binding ErrorMessage}" IsVisible="{Binding HasError}" TextWrapping="Wrap" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}" />
+        <TextBlock Text="{Binding MetadataSummary}" IsVisible="{Binding HasMetadata}" TextWrapping="Wrap" />
+        <TextBlock Text="{Binding CompletionText}" IsVisible="{Binding HasCompletion}" TextWrapping="Wrap" />
+        <StackPanel Orientation="Horizontal" Spacing="10">
+          <Button Content="Download" Classes="accent" AutomationProperties.Name="Start" IsEnabled="{Binding CanStart}" IsVisible="{Binding !IsTerminal}" Click="StartClicked" />
+          <Button Content="Cancel" IsEnabled="{Binding CanCancel}" IsVisible="{Binding IsBusy}" Click="CancelClicked" />
+          <Button Content="Try again" IsVisible="{Binding CanRetry}" Click="RetryClicked" />
+          <Button Content="Open file" AutomationProperties.Name="Open in Browser" IsVisible="{Binding CanOpenInBrowser}" Click="OpenInBrowserClicked" />
+          <Button Content="New download" IsVisible="{Binding IsTerminal}" Click="StartNewRunClicked" />
+        </StackPanel>
+        <TextBlock Text="{Binding StatusText}" Classes="help" AutomationProperties.Name="Status" />
+      </StackPanel>
+    </Border>
+  </Grid>
+</Window>

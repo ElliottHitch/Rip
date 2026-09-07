@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# .NET build output
+**/bin/
+**/obj/
+TestResults/
+**/TestResults/
+coverage/
+*.coverage
+*.trx
+
+# IDE
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.mp4
+*.webm
+*.mkv
+*.mp3
+*.m4a
+*.opus
+*.wav
+*.part
+*.ytdl
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+.secrets/
+*.pfx
+*.p12
+*.pem
+*.key
+rip.tools.json
+
+# Generated packaging evidence
+artifacts/
