@@ -31,6 +31,10 @@ needs outbound HTTPS access. This container is not a VM security boundary:
 never route untrusted PR workflows here or grant build code access to VPS
 credentials. Keep the VPS and base image patched.
 
+`RUNNER_MANUALLY_TRAP_SIG=1` makes the runner forward Docker shutdown signals
+and close its GitHub session cleanly, preventing stale-session conflicts on
+restart.
+
 `docker compose ps` shows whether the process is running. Verify actual GitHub
 connectivity in repository Settings → Actions → Runners, or with:
 
@@ -89,3 +93,25 @@ GitHub Actions. To return to hosted execution, restore the preceding
 and stop this Compose service after active jobs finish. Leave volumes intact
 until the runner is removed from repository settings. Existing published
 releases are unchanged by a workflow rollback.
+
+## Windows cross-build feasibility
+
+Checked on this ARM64 Linux image with .NET 10.0.400 and Velopack 1.2.0:
+
+- The existing locked restore and `dotnet publish -r win-x64 --self-contained
+  true` successfully compile the Windows application without application-code
+  changes.
+- The unchanged `packaging/windows.ps1` stops at its Windows smoke-check line:
+  `Start-Process -WindowStyle Hidden` is unsupported on Linux. Directly running
+  the resulting Windows x64 `Rip.exe` also fails with `Exec format error`.
+- Running the packaging command with `vpk "[win]" pack` successfully produces
+  the Windows installer, portable ZIP, and full update package on Linux.
+- Generated checksums and the existing `packaging/verify-windows.ps1` pass;
+  all nine cases in `tests/packaging.test.ps1` also pass on Linux PowerShell.
+
+The experiment used version `0.1.999` only in a temporary container; it was
+not published. Cross-compilation can move to the VPS in a future workflow
+change, but it must pass the built Windows executable to a Windows job for
+the existing execution check. Linux packaging success alone does not prove
+Windows startup, installation, or updates work. The deployed workflow keeps
+Windows packaging and execution together on GitHub as agreed.

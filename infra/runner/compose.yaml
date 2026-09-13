@@ -6,6 +6,8 @@ services:
     container_name: rip-actions-runner
     restart: unless-stopped
     init: true
+    environment:
+      RUNNER_MANUALLY_TRAP_SIG: '1'
     stop_grace_period: 2m
     cpus: 2.0
     mem_limit: 4g
