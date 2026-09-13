@@ -1,0 +1,25 @@
+name: rip-runner
+services:
+  runner:
+    build: .
+    image: rip-actions-runner:local
+    container_name: rip-actions-runner
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 2m
+    cpus: 2.0
+    mem_limit: 4g
+    pids_limit: 512
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - runner-state:/runner
+      - runner-home:/home/runner
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+volumes:
+  runner-state:
+  runner-home:

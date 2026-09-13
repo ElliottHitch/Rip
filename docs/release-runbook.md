@@ -1,18 +1,16 @@
 # Rip release runbook
 
-## CI and explicitly approved releases
+## Automatic releases
 
-`.github/workflows/release.yml` runs on pull requests, pushes to `main`, and manual dispatch. Every trigger runs the deterministic suite, builds and verifies the Windows installer and update feed, runs the presentation and Core tests, and retains the resulting files as a short-lived Actions artifact.
+`.github/workflows/release.yml` validates pull requests, pushes to `main`, and manual dispatches. Every successful push to `main` publishes the next `0.1.x` GitHub release automatically. A manual dispatch on `main` publishes only when **Publish the next 0.1.x GitHub release after validation** is selected; otherwise it only validates and retains artifacts.
 
-Ordinary pushes to `main` never publish a GitHub release. Publication is possible only from a manual workflow dispatch on `main` with **Publish the next 0.1.x GitHub release after validation** explicitly selected. Only the release job has repository write permission. Build jobs do not retain Git credentials, and Actions dependencies are pinned to commit hashes.
+For `main`, deterministic tests and release publishing run on the ARM64 Docker runner `rip-vps-docker` on the VPS. Windows installer packaging, the packaged executable smoke check, packaging verification, and Windows Core/App tests run on GitHub's Windows runner. Pull-request jobs and manual validation of other branches use GitHub-hosted runners. See [the Docker runner operations guide](../infra/runner/README.md).
 
-Published versions remain in the `0.1.x` line for now. On an approved release run, the workflow reads existing non-draft, non-prerelease `v0.1.x` releases, finds the highest patch number, and publishes the next patch version. For example, after `v0.1.0`, the next release is `v0.1.1`, then `v0.1.2`. The major and minor components stay fixed at `0.1` until this policy is intentionally changed.
+Only the release job has repository write permission. Build jobs do not retain Git credentials, and Actions dependencies are pinned to commit hashes. The VPS runner has no Docker socket, host home directory, or general GitHub token mounted into it. Keep untrusted jobs on GitHub-hosted runners; the local job-start hook additionally rejects events other than pushes/manual dispatches on this repository's `main` branch.
 
-The release job targets the `public-release` environment. Before publishing, configure that environment in repository settings with an appropriate required reviewer or wait timer; prevent self-review where the team structure allows it. Merely naming an environment in the workflow does not create an approval rule.
+Published versions remain in the `0.1.x` line. The Windows build selects one above the highest existing stable `v0.1.x` release (among the latest 100 releases). For example, after `v0.1.0`, the next release is `v0.1.1`. Main-branch workflows are serialized and do not cancel active releases. GitHub concurrency can replace a pending run with a newer push, so a burst of pushes can release only the latest queued commit.
 
-Protect `main` with a branch ruleset that requires a pull request and the repository's test checks, blocks force pushes and deletion, and applies to administrators unless an emergency bypass is intentionally retained. Repository settings are part of the release boundary and cannot be enforced by this file alone.
-
-Before approving publication, review the exact commit, complete the required validation below, and confirm that the release is intended for users. A successful CI build is evidence, not release approval.
+The release job uses the `public-release` environment, which currently has no approval or wait rules. Adding such rules later will pause automatic publishing. Merge only changes intended for release into `main` and retain the required validation below. A successful automated run does not establish the manual Windows installation/update checks below.
 
 Public releases contain only `Rip-win-Setup.exe`, the portable package, the full update package, `releases.win.json`, and `SHA256SUMS`. GitHub also provides its automatic source archives for every tag. Delta generation is disabled initially.
 
